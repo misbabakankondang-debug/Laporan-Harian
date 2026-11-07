@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Sidebar, TabType } from './components/Sidebar';
 import { Header } from './components/Header';
 import { MainDashboardView } from './components/MainDashboardView';
@@ -7,12 +7,15 @@ import { SummaryStatsView } from './components/SummaryStatsView';
 import { HistoryTrackingView } from './components/HistoryTrackingView';
 import { ReportDetailModal } from './components/ReportDetailModal';
 import { SettingsView } from './components/SettingsView';
+import { AuthView } from './components/AuthView';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { 
   ReportItem, 
   UserProfile, 
   AppSettings, 
   NotificationItem, 
-  ReportStatus 
+  ReportStatus,
+  USER_ROLES
 } from './types/report';
 import { 
   initialReports, 
@@ -20,8 +23,21 @@ import {
   initialSettings, 
   initialNotifications 
 } from './data/initialData';
+import { 
+  getSupabaseClient, 
+  mapDbReportToReportItem, 
+  mapReportItemToDbRow 
+} from './lib/supabase';
 
-export default function App() {
+function SIBAHARAppContent() {
+  const { 
+    currentUser, 
+    currentRole, 
+    isLoggedIn, 
+    isSupabaseConnected, 
+    updateCurrentUserProfile 
+  } = useAuth();
+
   // Local storage persistence (Requirement: Hapus Semua Laporan yang ada sehingga menjadi kosong semua)
   const [reports, setReports] = useState<ReportItem[]>(() => {
     try {
@@ -37,22 +53,6 @@ export default function App() {
       return [];
     } catch {
       return [];
-    }
-  });
-
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    try {
-      const saved = localStorage.getItem('sibahar_profile') || localStorage.getItem('reporthub_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.name === 'John Doe') {
-          return initialProfile;
-        }
-        return parsed;
-      }
-      return initialProfile;
-    } catch {
-      return initialProfile;
     }
   });
 
@@ -93,16 +93,43 @@ export default function App() {
   }, [reports]);
 
   useEffect(() => {
-    localStorage.setItem('sibahar_profile', JSON.stringify(userProfile));
-  }, [userProfile]);
-
-  useEffect(() => {
     localStorage.setItem('sibahar_settings', JSON.stringify(appSettings));
   }, [appSettings]);
 
   useEffect(() => {
     localStorage.setItem('sibahar_notifs', JSON.stringify(notifications));
   }, [notifications]);
+
+  // Sync with Supabase Database if connected
+  useEffect(() => {
+    const client = getSupabaseClient();
+    if (!client || !isSupabaseConnected) return;
+
+    let isMounted = true;
+    const fetchSupabaseReports = async () => {
+      try {
+        const { data, error } = await client
+          .from('reports')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data && isMounted) {
+          if (data.length > 0) {
+            const mapped = data.map(mapDbReportToReportItem);
+            setReports(mapped);
+          }
+        }
+      } catch (err) {
+        console.warn('Gagal memuat data dari Supabase:', err);
+      }
+    };
+
+    fetchSupabaseReports();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isSupabaseConnected]);
 
   // Keep selectedReportForDetail in sync with updated report items
   useEffect(() => {
@@ -136,25 +163,42 @@ export default function App() {
     const newReport: ReportItem = {
       ...newReportData,
       id: ticketId,
+      userId: currentUser.id,
+      userRole: currentUser.roleKey,
       createdAt: now.toISOString(),
       logs: [
         {
           id: 'log-' + Math.random().toString(36).substring(2, 9),
           timestamp: timeFormatted,
-          actor: userProfile.name,
+          actor: currentUser.name,
           action: 'Laporan Dibuat',
-          note: 'Laporan berhasil didaftarkan ke antrean sistem SIBAHAR.',
+          note: `Laporan berhasil diajukan oleh ${currentUser.name} (${USER_ROLES[currentUser.roleKey]?.label || currentUser.role}) ke antrean sistem SIBAHAR.`,
         },
       ],
     };
 
+    // Update local state
     setReports((prev) => [newReport, ...prev]);
 
-    // Add notification
+    // Insert to Supabase if connected
+    const client = getSupabaseClient();
+    if (client) {
+      client
+        .from('reports')
+        .insert(mapReportItemToDbRow(newReport, currentUser.id || 'usr-default', currentUser.roleKey || 'guru'))
+        .then(({ error }) => {
+          if (error) {
+            console.warn('Gagal sync insert ke Supabase:', error.message);
+          }
+        });
+    }
+
+    // Add user notification
+    const senderRoleLabel = USER_ROLES[currentUser.roleKey]?.label || currentUser.role;
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
-      title: 'Laporan Baru Terkirim',
-      message: `Tiket #${ticketId} ("${newReport.title.slice(0, 35)}...") berhasil dikirim ke antrean SIBAHAR.`,
+      title: `Laporan Baru [${senderRoleLabel}]`,
+      message: `Tiket #${ticketId} ("${newReport.title.slice(0, 35)}...") berhasil dikirim oleh ${currentUser.name} ke antrean pusat pengawasan SIBAHAR.`,
       time: 'Baru saja',
       read: false,
       type: 'system',
@@ -184,13 +228,15 @@ export default function App() {
     const draftReport: ReportItem = {
       ...draftData,
       id: draftId,
+      userId: currentUser.id,
+      userRole: currentUser.roleKey,
       status: 'draft',
       createdAt: now.toISOString(),
       logs: [
         {
           id: 'log-' + Math.random().toString(36).substring(2, 9),
           timestamp: timeFormatted,
-          actor: userProfile.name,
+          actor: currentUser.name,
           action: 'Draft Disimpan',
         },
       ],
@@ -209,6 +255,23 @@ export default function App() {
     if (selectedReportForDetail?.id === updatedReport.id) {
       setSelectedReportForDetail(updatedReport);
     }
+
+    // Sync to Supabase
+    const client = getSupabaseClient();
+    if (client) {
+      client
+        .from('reports')
+        .update(mapReportItemToDbRow(
+          updatedReport, 
+          updatedReport.userId || currentUser.id || 'usr-default', 
+          updatedReport.userRole || currentUser.roleKey || 'guru'
+        ))
+        .eq('id', updatedReport.id)
+        .then(({ error }) => {
+          if (error) console.warn('Supabase update error:', error.message);
+        });
+    }
+
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
       title: `Laporan #${updatedReport.id} Diperbarui`,
@@ -226,6 +289,19 @@ export default function App() {
     if (selectedReportForDetail?.id === reportId) {
       setSelectedReportForDetail(null);
     }
+
+    // Sync to Supabase
+    const client = getSupabaseClient();
+    if (client) {
+      client
+        .from('reports')
+        .delete()
+        .eq('id', reportId)
+        .then(({ error }) => {
+          if (error) console.warn('Supabase delete error:', error.message);
+        });
+    }
+
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
       title: 'Laporan Dihapus',
@@ -283,7 +359,7 @@ export default function App() {
     setReports((prev) =>
       prev.map((r) => {
         if (r.id === reportId) {
-          return {
+          const updated = {
             ...r,
             status: newStatus,
             logs: [
@@ -291,12 +367,26 @@ export default function App() {
               {
                 id: 'log-' + Math.random().toString(36).substring(2, 9),
                 timestamp: timeFormatted,
-                actor: userProfile.name,
+                actor: currentUser.name,
                 action: actionLabel,
                 note: note || undefined,
               },
             ],
           };
+
+          // Sync status to Supabase
+          const client = getSupabaseClient();
+          if (client) {
+            client
+              .from('reports')
+              .update({ status: newStatus, logs: updated.logs, updated_at: now.toISOString() })
+              .eq('id', reportId)
+              .then(({ error }) => {
+                if (error) console.warn('Supabase status update error:', error.message);
+              });
+          }
+
+          return updated;
         }
         return r;
       })
@@ -326,18 +416,32 @@ export default function App() {
     setReports((prev) =>
       prev.map((r) => {
         if (r.id === reportId) {
+          const updatedLogs = [
+            ...r.logs,
+            {
+              id: 'log-' + Math.random().toString(36).substring(2, 9),
+              timestamp: timeFormatted,
+              actor: currentUser.name,
+              action: 'Catatan Tindak Lanjut',
+              note,
+            },
+          ];
+
+          // Sync note log to Supabase
+          const client = getSupabaseClient();
+          if (client) {
+            client
+              .from('reports')
+              .update({ logs: updatedLogs, updated_at: now.toISOString() })
+              .eq('id', reportId)
+              .then(({ error }) => {
+                if (error) console.warn('Supabase log note update error:', error.message);
+              });
+          }
+
           return {
             ...r,
-            logs: [
-              ...r.logs,
-              {
-                id: 'log-' + Math.random().toString(36).substring(2, 9),
-                timestamp: timeFormatted,
-                actor: userProfile.name,
-                action: 'Catatan Tindak Lanjut',
-                note,
-              },
-            ],
+            logs: updatedLogs,
           };
         }
         return r;
@@ -348,7 +452,7 @@ export default function App() {
   const handleResetToDefault = () => {
     if (window.confirm('Apakah Anda yakin ingin mereset seluruh data kembali ke data contoh bawaan SIBAHAR?')) {
       setReports(initialReports);
-      setUserProfile(initialProfile);
+      updateCurrentUserProfile(initialProfile);
       setAppSettings(initialSettings);
       setNotifications(initialNotifications);
       localStorage.removeItem('sibahar_items');
@@ -373,10 +477,31 @@ export default function App() {
     setCurrentTab('history');
   };
 
+  // Sesuai Aturan RBAC:
+  // - Kepala Sekolah melihat seluruh laporan dari semua staf (non-draft) + laporan milik sendiri
+  // - 5 peran lainnya (Admin, Wali Asrama, Wali Asuh, Guru, Tenaga Keamanan) HANYA melihat laporan miliknya sendiri
+  const isKepalaSekolah = currentRole === 'kepala_sekolah';
+
+  const roleFilteredReports = useMemo(() => {
+    if (isKepalaSekolah) {
+      return reports.filter((r) => r.status !== 'draft' || r.userId === currentUser.id);
+    }
+    // Peran lainnya hanya laporan milik sendiri
+    return reports.filter((r) => 
+      (r.userId && r.userId === currentUser.id) ||
+      r.reporterName.toLowerCase() === currentUser.name.toLowerCase()
+    );
+  }, [reports, isKepalaSekolah, currentUser]);
+
   // Count active non-draft tickets for sidebar badge
-  const activeTicketsCount = reports.filter(
+  const activeTicketsCount = roleFilteredReports.filter(
     (r) => r.status === 'diproses' || r.status === 'menunggu'
   ).length;
+
+  // Unauthenticated screen
+  if (!isLoggedIn) {
+    return <AuthView onSuccess={() => {}} />;
+  }
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-800 antialiased overflow-hidden">
@@ -390,7 +515,7 @@ export default function App() {
           }
         }}
         activeTicketsCount={activeTicketsCount}
-        userProfile={userProfile}
+        userProfile={currentUser}
         isOpenMobile={isOpenMobileSidebar}
         onCloseMobile={() => setIsOpenMobileSidebar(false)}
         mainLogoUrl={appSettings.mainLogoUrl}
@@ -426,7 +551,7 @@ export default function App() {
           {currentTab === 'dashboard' && (
             <MainDashboardView
               reports={reports}
-              userProfile={userProfile}
+              userProfile={currentUser}
               appSettings={appSettings}
               onNavigateToTab={(tab) => {
                 setCurrentTab(tab);
@@ -441,7 +566,7 @@ export default function App() {
           {currentTab === 'create' && (
             <CreateReportView
               reports={reports}
-              userProfile={userProfile}
+              userProfile={currentUser}
               onSubmitReport={handleSubmitReport}
               onSaveDraft={handleSaveDraft}
               onNavigateTab={(tab, filter) => {
@@ -458,7 +583,7 @@ export default function App() {
 
           {currentTab === 'stats' && (
             <SummaryStatsView
-              reports={reports}
+              reports={roleFilteredReports}
               onViewReport={(report) => setSelectedReportForDetail(report)}
               onNavigateToHistory={handleNavigateToHistory}
             />
@@ -466,21 +591,23 @@ export default function App() {
 
           {currentTab === 'history' && (
             <HistoryTrackingView
-              reports={reports}
+              reports={roleFilteredReports}
               onViewReportDetail={(report) => setSelectedReportForDetail(report)}
               onNavigateToCreate={() => setCurrentTab('create')}
               onEditReport={handleEditReport}
               onDeleteReport={handleDeleteReport}
               initialStatusFilter={historyStatusFilter}
+              currentUserId={currentUser.id}
+              currentUserRole={currentRole}
             />
           )}
 
           {currentTab === 'settings' && (
             <SettingsView
-              userProfile={userProfile}
+              userProfile={currentUser}
               appSettings={appSettings}
               reports={reports}
-              onSaveProfile={setUserProfile}
+              onSaveProfile={updateCurrentUserProfile}
               onSaveSettings={setAppSettings}
               onResetToDefault={handleResetToDefault}
               onDeleteReportsByRange={handleDeleteReportsByRange}
@@ -496,11 +623,19 @@ export default function App() {
           onClose={() => setSelectedReportForDetail(null)}
           onUpdateStatus={handleUpdateStatus}
           onAddNote={handleAddNote}
-          currentUser={userProfile.name}
+          currentUser={currentUser.name}
           appSettings={appSettings}
-          userProfile={userProfile}
+          userProfile={currentUser}
         />
       )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <SIBAHARAppContent />
+    </AuthProvider>
   );
 }

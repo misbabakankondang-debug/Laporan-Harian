@@ -9,7 +9,7 @@ import {
   Pencil,
   Trash2
 } from 'lucide-react';
-import { ReportItem, ReportPriority } from '../types/report';
+import { ReportItem, ReportPriority, UserRole, USER_ROLES } from '../types/report';
 import { categoryLabels, priorityLabels, statusLabels, formatDateOnly } from '../utils/formatters';
 import { EditReportModal } from './EditReportModal';
 
@@ -20,6 +20,8 @@ interface HistoryTrackingViewProps {
   onEditReport: (report: ReportItem) => void;
   onDeleteReport: (reportId: string) => void;
   initialStatusFilter?: string;
+  currentUserId?: string;
+  currentUserRole?: UserRole;
 }
 
 export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
@@ -29,6 +31,8 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
   onEditReport,
   onDeleteReport,
   initialStatusFilter = 'all',
+  currentUserId,
+  currentUserRole = 'kepala_sekolah',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>(initialStatusFilter);
@@ -362,14 +366,25 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                         </span>
                       </td>
 
-                      {/* Penanggung Jawab */}
+                      {/* Penanggung Jawab & Pembuat */}
                       <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
-                        {report.assignedTo || (
-                          <span className="text-slate-400 italic">Belum ditugaskan</span>
-                        )}
+                        <p className="font-medium text-slate-800 text-xs truncate max-w-[150px]">
+                          {report.picName || report.reporterName}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          {report.userRole && USER_ROLES[report.userRole] ? (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded">
+                              {USER_ROLES[report.userRole].label}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">
+                              {report.reporterDept || 'Sekolah Rakyat'}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
-                      {/* Menu Aksi: Detail, Edit, Hapus */}
+                      {/* Menu Aksi: Detail, Edit, Hapus (Berdasarkan Hak Akses RBAC) */}
                       <td className="py-3.5 px-4 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                           {/* Detail */}
@@ -381,23 +396,48 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                             <Eye className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Edit Menu */}
-                          <button
-                            onClick={(e) => handleEditClick(e, report)}
-                            className="p-1.5 text-slate-600 bg-slate-100 hover:bg-amber-50 hover:text-amber-700 rounded-md transition"
-                            title="Edit Laporan"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
+                          {/* Sesuai Hak Akses RBAC:
+                              Kepala Sekolah dapat melihat SEMUA laporan, tetapi TIDAK DAPAT mengedit/menghapus laporan milik staf lain.
+                              Hanya pemilik laporan (atau staf pembuat) yang dapat mengedit/menghapus laporannya sendiri.
+                          */}
+                          {(() => {
+                            const isOwner = (report.userId && currentUserId && report.userId === currentUserId) ||
+                              (!report.userId && currentUserRole !== 'kepala_sekolah');
+                            const canEditDelete = currentUserRole !== 'kepala_sekolah' || isOwner;
 
-                          {/* Hapus Menu */}
-                          <button
-                            onClick={(e) => handleDeleteClick(e, report)}
-                            className="p-1.5 text-slate-600 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 rounded-md transition"
-                            title="Hapus Laporan"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                            if (!canEditDelete) {
+                              return (
+                                <span 
+                                  className="text-[10.5px] font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded border border-slate-200 cursor-not-allowed"
+                                  title="Wewenang Kepala Sekolah: Hanya Baca (Tidak dapat mengedit/menghapus laporan milik staf lain)"
+                                >
+                                  Hanya Baca
+                                </span>
+                              );
+                            }
+
+                            return (
+                              <>
+                                {/* Edit Menu */}
+                                <button
+                                  onClick={(e) => handleEditClick(e, report)}
+                                  className="p-1.5 text-slate-600 bg-slate-100 hover:bg-amber-50 hover:text-amber-700 rounded-md transition"
+                                  title="Edit Laporan Milik Sendiri"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+
+                                {/* Hapus Menu */}
+                                <button
+                                  onClick={(e) => handleDeleteClick(e, report)}
+                                  className="p-1.5 text-slate-600 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 rounded-md transition"
+                                  title="Hapus Laporan Milik Sendiri"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            );
+                          })()}
                         </div>
                       </td>
                     </tr>
