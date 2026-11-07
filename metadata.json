@@ -1,0 +1,6 @@
+{
+  "name": "ReportHub - Dashboard Sistem Pelaporan",
+  "description": "Sistem pelaporan modern dan responsif untuk pembuatan laporan insiden, kendala operasional, tracking tiket, statistik ringkasan, dan riwayat status.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

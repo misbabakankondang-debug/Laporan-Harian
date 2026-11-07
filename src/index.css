@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@media print {
+  @page {
+    size: legal portrait;
+    margin: 1.5cm 1.5cm 1.5cm 1.5cm;
+  }
+
+  aside, header, nav, .no-print {
+    display: none !important;
+  }
+
+  body, main {
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  .print-legal {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+}
