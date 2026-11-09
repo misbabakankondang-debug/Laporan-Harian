@@ -352,4 +352,4 @@ export async function logAuditEvent(params: {
     console.warn('Gagal mencatat audit log ke Supabase:', err);
   }
 }
-export const supabase = getSupabaseClient();
+export const supabase = createClient(envUrl, envAnonKey);
