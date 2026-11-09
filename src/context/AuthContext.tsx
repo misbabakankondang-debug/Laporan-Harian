@@ -404,8 +404,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // 3. Hapus Pengguna oleh Admin
-  const deleteUserByAdmin = (userId: string): { success: boolean; error?: string } => {
+ // 3. Hapus Pengguna oleh Admin
+  const deleteUserByAdmin = async (userId: string): Promise<{ success: boolean; error?: string }> => {
     if (currentUser.id === userId) {
       return { success: false, error: 'Tidak dapat menghapus akun yang sedang Anda gunakan saat ini.' };
     }
@@ -419,6 +419,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const adminCount = allUsersList.filter((u) => u.roleKey === 'admin').length;
     if (targetUser.roleKey === 'admin' && adminCount <= 1) {
       return { success: false, error: 'Sistem harus memiliki minimal satu akun Administrator.' };
+    }
+
+    // TAMBAHKAN PERINTAH SUPABASE DI SINI
+    const { error: dbError } = await supabase
+      .from('profiles') // Sesuaikan nama tabel Anda jika berbeda (misal: 'users' atau 'profiles')
+      .delete()
+      .eq('id', userId);
+
+    if (dbError) {
+      return { success: false, error: dbError.message };
     }
 
     setAllUsersList((prev) => prev.filter((u) => u.id !== userId));
