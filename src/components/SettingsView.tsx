@@ -33,6 +33,7 @@ import { UserProfile, AppSettings, ReportItem, UserRole, USER_ROLES } from '../t
 import { KemensosLogo } from './KemensosLogo';
 import { useAuth } from '../context/AuthContext';
 import { isValidSupabaseUrl, isValidSupabaseKey, cleanCredentialString } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { FULL_SUPABASE_SCHEMA_SQL } from '../data/supabaseSchema';
 
 interface SettingsViewProps {
