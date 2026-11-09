@@ -389,7 +389,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setEditingUser(null);
   };
 
-  const handleConfirmDeleteUser = async () => {
+ const handleConfirmDeleteUser = async () => {
   if (!deletingUser) return;
   const targetDeleteId = deletingUser.id || deletingUser.user_id || deletingUser.uid;
   
@@ -398,10 +398,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     return;
   }
 
-  const { error } = await supabase
-    .from('profiles')
-    .delete()
-    .eq('id', targetDeleteId);
+  // Memanggil fungsi RPC Supabase di sisi server database
+  const { error } = await supabase.rpc('delete_user_profile', {
+    target_id: targetDeleteId
+  });
 
   if (error) {
     alert('Gagal menghapus pengguna: ' + error.message);
