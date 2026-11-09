@@ -29,7 +29,8 @@ export type UserRole =
   | 'wali_asrama'
   | 'wali_asuh'
   | 'guru'
-  | 'keamanan'
+  | 'tenaga_keamanan'
+  | 'keamanan' // alias for tenaga_keamanan
   | 'kepala_sekolah';
 
 export interface UserRoleInfo {
@@ -63,6 +64,12 @@ export const USER_ROLES: Record<UserRole, UserRoleInfo> = {
     label: 'Guru',
     description: 'Pelaporan kegiatan belajar mengajar, presensi kelas, bimbingan akademik, dan tugas sekolah.',
     badgeClass: 'bg-blue-100 text-blue-800 border-blue-200',
+  },
+  tenaga_keamanan: {
+    role: 'tenaga_keamanan',
+    label: 'Tenaga Keamanan',
+    description: 'Pengawasan ketertiban gerbang, patroli malam lingkungan, dan laporan insiden darurat.',
+    badgeClass: 'bg-amber-100 text-amber-800 border-amber-200',
   },
   keamanan: {
     role: 'keamanan',
@@ -130,6 +137,20 @@ export interface UserProfile {
   role: string;
   roleKey: UserRole;
   avatarInitials: string;
+  avatarUrl?: string; // Foto profil pengguna
+  isActive?: boolean;
+}
+
+export interface AuditLogItem {
+  id: string;
+  userId?: string;
+  userRole?: string;
+  userName?: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  details?: any;
+  createdAt: string;
 }
 
 export interface NotificationItem {

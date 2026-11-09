@@ -10,7 +10,9 @@ import {
   PhoneCall,
   UserCheck,
   LogOut,
-  ChevronDown
+  ChevronDown,
+  Copy,
+  Check
 } from 'lucide-react';
 import { UserProfile, UserRole, USER_ROLES } from '../types/report';
 import { useAuth } from '../context/AuthContext';
@@ -75,6 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const { currentRole, loginWithRole, logout } = useAuth();
   const [showRoleModal, setShowRoleModal] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   const handleNavClick = (tab: TabType) => {
     onSelectTab(tab);
@@ -206,8 +209,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="flex items-center gap-3 cursor-pointer hover:opacity-90 transition"
             title="Buka Pengaturan Profil"
           >
-            <div className="w-9 h-9 rounded-full bg-white text-emerald-900 flex items-center justify-center font-bold text-xs shrink-0 shadow-xs border border-emerald-200">
-              {userProfile.avatarInitials}
+            <div className="w-9 h-9 rounded-full bg-white text-emerald-900 flex items-center justify-center font-bold text-xs shrink-0 shadow-xs border border-emerald-200 overflow-hidden">
+              {userProfile.avatarUrl ? (
+                <img src={userProfile.avatarUrl} alt={userProfile.name} className="w-full h-full object-cover" />
+              ) : (
+                userProfile.avatarInitials
+              )}
             </div>
             <div className="overflow-hidden min-w-0 flex-1">
               <p className="text-xs font-semibold truncate text-white" title={userProfile.name}>{userProfile.name}</p>
@@ -274,10 +281,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         : 'border-slate-200 hover:border-emerald-300 hover:bg-slate-50'
                     }`}
                   >
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 ${
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 overflow-hidden ${
                       isActive ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'
                     }`}>
-                      {u.avatarInitials}
+                      {u.avatarUrl ? (
+                        <img src={u.avatarUrl} alt={u.name} className="w-full h-full object-cover" />
+                      ) : (
+                        u.avatarInitials
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-1">
@@ -297,7 +308,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs">
-              <span className="text-slate-500">Row Level Security (RLS) aktif</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const url = `${window.location.origin}${window.location.pathname}?portal=user`;
+                  navigator.clipboard.writeText(url);
+                  setCopiedLink(true);
+                  setTimeout(() => setCopiedLink(false), 2000);
+                }}
+                className="text-emerald-700 hover:text-emerald-800 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedLink ? 'Link Tersalin!' : 'Salin Link Pengguna'}</span>
+              </button>
               <button
                 onClick={() => setShowRoleModal(false)}
                 className="px-3 py-1.5 text-slate-600 hover:text-slate-900 font-medium"

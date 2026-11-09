@@ -7,14 +7,14 @@ export const FULL_SUPABASE_SCHEMA_SQL = `-- ====================================
 -- 1. EXTENSIONS
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 2. ENUM TIPE ROLE PENGGUNA
+-- 2. ENUM TIPE ROLE PENGGUNA (6 Role Resmi)
 DO $$ BEGIN
     CREATE TYPE user_role_type AS ENUM (
         'admin',
         'wali_asrama',
         'wali_asuh',
         'guru',
-        'keamanan',
+        'tenaga_keamanan',
         'kepala_sekolah'
     );
 EXCEPTION
@@ -31,13 +31,14 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     phone TEXT,
     department TEXT DEFAULT 'Sekolah Rakyat Terintegerasi 1 Sumedang',
     avatar_initials TEXT DEFAULT 'SR',
+    is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- Index profiles
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
+CREATE INDEX IF NOT EXISTS idx_profiles_active ON public.profiles(is_active);
 
 -- 4. TABEL REPORT_CATEGORIES
 CREATE TABLE IF NOT EXISTS public.report_categories (
@@ -48,7 +49,7 @@ CREATE TABLE IF NOT EXISTS public.report_categories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- Seed Categories
+-- Seed Categories Bawaan
 INSERT INTO public.report_categories (code, category_name, description)
 VALUES 
     ('kategori_1', 'Tata Tertib, Relasi & Prilaku, Adaptasi dan Motivasi, Kedisiplinan', 'Pembinaan kedisiplinan dan hubungan antar santri/siswa'),
@@ -88,7 +89,6 @@ CREATE TABLE IF NOT EXISTS public.reports (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- Indeks performa pencarian laporan
 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON public.reports(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_incident_date ON public.reports(incident_date DESC);
 CREATE INDEX IF NOT EXISTS idx_reports_category ON public.reports(category);
@@ -112,15 +112,44 @@ CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON public.notifications(r
 CREATE INDEX IF NOT EXISTS idx_notifications_role ON public.notifications(recipient_role);
 CREATE INDEX IF NOT EXISTS idx_notifications_read ON public.notifications(is_read);
 
+-- 7. TABEL AUDIT_LOGS
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    user_role TEXT,
+    user_name TEXT,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    details JSONB,
+    ip_address TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON public.audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON public.audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON public.audit_logs(created_at DESC);
+
 -- ==============================================================================
--- 7. KEAMANAN DATABASE (ROW LEVEL SECURITY - RLS WAJIB)
+-- 8. ROW LEVEL SECURITY (RLS) WAJIB
 -- ==============================================================================
 
--- Aktifkan RLS
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.report_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+
+-- Helper function: cek apakah user saat ini aktif
+CREATE OR REPLACE FUNCTION public.is_user_active()
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1 FROM public.profiles
+        WHERE id = auth.uid() AND is_active = true
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Helper function: cek apakah user saat ini adalah Kepala Sekolah
 CREATE OR REPLACE FUNCTION public.is_kepala_sekolah()
@@ -128,7 +157,7 @@ RETURNS BOOLEAN AS $$
 BEGIN
     RETURN EXISTS (
         SELECT 1 FROM public.profiles
-        WHERE id = auth.uid() AND role = 'kepala_sekolah'
+        WHERE id = auth.uid() AND role = 'kepala_sekolah' AND is_active = true
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -139,111 +168,127 @@ RETURNS BOOLEAN AS $$
 BEGIN
     RETURN EXISTS (
         SELECT 1 FROM public.profiles
-        WHERE id = auth.uid() AND role = 'admin'
+        WHERE id = auth.uid() AND role = 'admin' AND is_active = true
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- --- A. KEBIJAKAN RLS PROFILES ---
-CREATE POLICY "Users can view own profile"
+CREATE POLICY "Profiles SELECT"
     ON public.profiles FOR SELECT
     USING (auth.uid() = id OR public.is_kepala_sekolah() OR public.is_admin());
 
-CREATE POLICY "Users can update own profile"
+CREATE POLICY "Profiles UPDATE"
     ON public.profiles FOR UPDATE
-    USING (auth.uid() = id);
+    USING (auth.uid() = id OR public.is_admin());
 
-CREATE POLICY "Admin can manage profiles"
-    ON public.profiles FOR ALL
-    USING (public.is_admin());
+CREATE POLICY "Profiles INSERT by Admin or Self"
+    ON public.profiles FOR INSERT
+    WITH CHECK (auth.uid() = id OR public.is_admin());
 
--- --- B. KEBIJAKAN RLS REPORT CATEGORIES ---
-CREATE POLICY "Anyone authenticated can view categories"
-    ON public.report_categories FOR SELECT
-    TO authenticated
-    USING (true);
-
--- --- C. KEBIJAKAN RLS REPORTS ---
--- 1. SELECT: Staff hanya melihat miliknya sendiri; Kepala Sekolah melihat semua
-CREATE POLICY "Reports SELECT Policy"
-    ON public.reports FOR SELECT
-    USING (
-        auth.uid() = user_id 
-        OR public.is_kepala_sekolah()
-    );
-
--- 2. INSERT: Hanya dengan user_id miliknya
-CREATE POLICY "Reports INSERT Policy"
-    ON public.reports FOR INSERT
-    WITH CHECK (
-        auth.uid() = user_id
-    );
-
--- 3. UPDATE: Hanya pemilik laporan sendiri (Kepala Sekolah tidak boleh mengedit milik orang lain)
-CREATE POLICY "Reports UPDATE Policy"
-    ON public.reports FOR UPDATE
-    USING (
-        auth.uid() = user_id
-    )
-    WITH CHECK (
-        auth.uid() = user_id
-    );
-
--- 4. DELETE: Hanya pemilik laporan sendiri (Kepala Sekolah tidak boleh menghapus milik orang lain)
-CREATE POLICY "Reports DELETE Policy"
-    ON public.reports FOR DELETE
-    USING (
-        auth.uid() = user_id
-    );
-
--- --- D. KEBIJAKAN RLS NOTIFICATIONS ---
-CREATE POLICY "Notifications SELECT Policy"
-    ON public.notifications FOR SELECT
-    USING (
-        auth.uid() = recipient_id
-        OR (recipient_role = 'kepala_sekolah' AND public.is_kepala_sekolah())
-        OR (recipient_role = 'admin' AND public.is_admin())
-    );
-
-CREATE POLICY "Notifications UPDATE Policy"
-    ON public.notifications FOR UPDATE
-    USING (
-        auth.uid() = recipient_id
-        OR (recipient_role = 'kepala_sekolah' AND public.is_kepala_sekolah())
-    );
-
-CREATE POLICY "Notifications INSERT Policy"
-    ON public.notifications FOR INSERT
-    WITH CHECK (true);
-
--- ==============================================================================
--- 8. TRIGGERS & OTOMASI NOTIFIKASI KEPALA SEKOLAH
--- ==============================================================================
-
--- A. Trigger profil otomatis saat user register di auth.users
-CREATE OR REPLACE FUNCTION public.handle_new_user()
+-- Mencegah non-admin mengubah role atau status aktif sendiri
+CREATE OR REPLACE FUNCTION public.protect_profile_fields()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO public.profiles (id, full_name, email, role, nip, department, avatar_initials)
-    VALUES (
-        NEW.id,
-        COALESCE(NEW.raw_user_meta_data->>'full_name', 'Pengguna SIBAHAR'),
-        NEW.email,
-        COALESCE((NEW.raw_user_meta_data->>'role')::public.user_role_type, 'guru'::public.user_role_type),
-        COALESCE(NEW.raw_user_meta_data->>'nip', '-'),
-        COALESCE(NEW.raw_user_meta_data->>'department', 'Sekolah Rakyat Terintegerasi 1 Sumedang'),
-        UPPER(SUBSTRING(COALESCE(NEW.raw_user_meta_data->>'full_name', 'SR'), 1, 2))
-    );
+    IF NOT public.is_admin() THEN
+        NEW.role := OLD.role;
+        NEW.is_active := OLD.is_active;
+        NEW.email := OLD.email;
+    END IF;
+    NEW.updated_at := timezone('utc'::text, now());
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-    AFTER INSERT ON auth.users
-    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+DROP TRIGGER IF EXISTS trg_protect_profile_fields ON public.profiles;
+CREATE TRIGGER trg_protect_profile_fields
+    BEFORE UPDATE ON public.profiles
+    FOR EACH ROW EXECUTE FUNCTION public.protect_profile_fields();
 
--- B. Trigger: Notifikasi otomatis ke Kepala Sekolah saat laporan diajukan
+-- --- B. KEBIJAKAN RLS REPORT CATEGORIES ---
+CREATE POLICY "Categories SELECT"
+    ON public.report_categories FOR SELECT
+    TO authenticated
+    USING (true);
+
+CREATE POLICY "Categories INSERT/UPDATE/DELETE by Admin"
+    ON public.report_categories FOR ALL
+    USING (public.is_admin());
+
+-- --- C. KEBIJAKAN RLS REPORTS (KETAT) ---
+-- 1. SELECT: Staff HANYA melihat miliknya sendiri. Kepala Sekolah membaca SELURUH laporan.
+-- Admin TIDAK otomatis membaca laporan orang lain.
+CREATE POLICY "Reports SELECT Policy"
+    ON public.reports FOR SELECT
+    USING (
+        public.is_user_active() AND (
+            auth.uid() = user_id 
+            OR (public.is_kepala_sekolah() AND status <> 'draft')
+        )
+    );
+
+-- 2. INSERT: Hanya pengguna aktif untuk user_id miliknya sendiri
+CREATE POLICY "Reports INSERT Policy"
+    ON public.reports FOR INSERT
+    WITH CHECK (
+        public.is_user_active() AND auth.uid() = user_id
+    );
+
+-- 3. UPDATE: HANYA pemilik laporan sendiri. Kepala Sekolah TIDAK BISA mengubah laporan orang lain.
+CREATE POLICY "Reports UPDATE Policy"
+    ON public.reports FOR UPDATE
+    USING (
+        public.is_user_active() AND auth.uid() = user_id
+    )
+    WITH CHECK (
+        public.is_user_active() AND auth.uid() = user_id
+    );
+
+-- 4. DELETE: HANYA pemilik laporan sendiri. Kepala Sekolah TIDAK BISA menghapus laporan orang lain.
+CREATE POLICY "Reports DELETE Policy"
+    ON public.reports FOR DELETE
+    USING (
+        public.is_user_active() AND auth.uid() = user_id
+    );
+
+-- --- D. KEBIJAKAN RLS NOTIFICATIONS ---
+CREATE POLICY "Notifications SELECT"
+    ON public.notifications FOR SELECT
+    USING (
+        public.is_user_active() AND (
+            auth.uid() = recipient_id
+            OR (recipient_role = 'kepala_sekolah' AND public.is_kepala_sekolah())
+            OR (recipient_role = 'admin' AND public.is_admin())
+        )
+    );
+
+CREATE POLICY "Notifications UPDATE"
+    ON public.notifications FOR UPDATE
+    USING (
+        public.is_user_active() AND (
+            auth.uid() = recipient_id
+            OR (recipient_role = 'kepala_sekolah' AND public.is_kepala_sekolah())
+        )
+    );
+
+CREATE POLICY "Notifications INSERT"
+    ON public.notifications FOR INSERT
+    WITH CHECK (true);
+
+-- --- E. KEBIJAKAN RLS AUDIT_LOGS ---
+CREATE POLICY "Audit Logs INSERT"
+    ON public.audit_logs FOR INSERT
+    WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Audit Logs SELECT"
+    ON public.audit_logs FOR SELECT
+    USING (public.is_admin() OR public.is_kepala_sekolah());
+
+-- ==============================================================================
+-- 9. TRIGGERS & OTOMASI NOTIFIKASI KEPALA SEKOLAH
+-- ==============================================================================
+
+-- A. Trigger: Notifikasi otomatis ke Kepala Sekolah saat laporan non-draft diajukan
 CREATE OR REPLACE FUNCTION public.notify_kepala_sekolah_on_report()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -273,17 +318,32 @@ CREATE TRIGGER on_report_inserted
     FOR EACH ROW EXECUTE FUNCTION public.notify_kepala_sekolah_on_report();
 
 -- ==============================================================================
--- 9. SUPABASE STORAGE (BUCKET: report-attachments)
+-- 10. REALTIME ACTIVATION
+-- ==============================================================================
+DO $$ BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.reports;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- ==============================================================================
+-- 11. SUPABASE STORAGE (BUCKET: report-attachments)
 -- ==============================================================================
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('report-attachments', 'report-attachments', true)
 ON CONFLICT (id) DO NOTHING;
 
-CREATE POLICY "Allow authenticated users to upload files"
+CREATE POLICY "Allow authenticated upload attachments"
 ON storage.objects FOR INSERT TO authenticated
 WITH CHECK (bucket_id = 'report-attachments');
 
-CREATE POLICY "Allow public read on attachments"
+CREATE POLICY "Allow public read attachments"
 ON storage.objects FOR SELECT TO authenticated
 USING (bucket_id = 'report-attachments');
 `;

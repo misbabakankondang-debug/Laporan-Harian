@@ -182,12 +182,21 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               </p>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-white/20 text-xs">
-              <span className="text-emerald-200 text-[11px]">Pengguna Saat Ini:</span>
-              <p className="font-bold text-white truncate text-sm mt-0.5" title={userProfile.name}>
-                {userProfile.name}
-              </p>
-              <p className="text-emerald-300 text-[11px] font-medium truncate">{userProfile.role}</p>
+            <div className="mt-4 pt-3 border-t border-white/20 text-xs flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-white text-emerald-900 border-2 border-emerald-300 shadow-xs shrink-0 overflow-hidden flex items-center justify-center font-bold text-xs">
+                {userProfile.avatarUrl ? (
+                  <img src={userProfile.avatarUrl} alt={userProfile.name} className="w-full h-full object-cover" />
+                ) : (
+                  userProfile.avatarInitials
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-emerald-200 text-[10px] uppercase font-bold tracking-wider">Pengguna Aktif:</span>
+                <p className="font-bold text-white truncate text-xs sm:text-sm mt-0.5" title={userProfile.name}>
+                  {userProfile.name}
+                </p>
+                <p className="text-emerald-300 text-[10.5px] font-medium truncate">{userProfile.role}</p>
+              </div>
             </div>
           </div>
         </div>
@@ -199,22 +208,25 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
       {isKepalaSekolah && (
         <div className="space-y-6">
           {/* Banner Info Pengawasan Kepala Sekolah */}
-          <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between flex-wrap gap-3">
+          <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between flex-wrap gap-3 shadow-2xs">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs">
+              <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs shrink-0">
                 <ShieldCheck className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-emerald-950">
-                  Pusat Kendali Pengawasan Kepala Sekolah
+                <h3 className="text-sm font-bold text-emerald-950 flex items-center gap-2">
+                  <span>Pusat Kendali Pengawasan Kepala Sekolah</span>
+                  <span className="text-[10px] font-bold bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-full">
+                    Otomatis Masuk Real-Time
+                  </span>
                 </h3>
-                <p className="text-xs text-emerald-800">
-                  Anda memiliki wewenang untuk meninjau seluruh laporan yang diajukan oleh Wali Asrama, Wali Asuh, Guru, Tenaga Keamanan, dan Admin.
+                <p className="text-xs text-emerald-800 leading-relaxed mt-0.5">
+                  Setiap kali pengguna (Wali Asrama, Wali Asuh, Guru, Tenaga Keamanan, Admin) membuat laporan, data otomatis langsung masuk ke akun Kepala Sekolah.
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono font-bold text-emerald-900 bg-white px-3 py-1.5 rounded-xl border border-emerald-300">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs font-mono font-bold text-emerald-900 bg-white px-3 py-1.5 rounded-xl border border-emerald-300 shadow-2xs">
                 Total Masuk: {reports.filter(r => r.status !== 'draft').length} Tiket
               </span>
             </div>

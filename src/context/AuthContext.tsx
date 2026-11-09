@@ -12,12 +12,16 @@ interface AuthContextType {
   supabaseStatus: SupabaseConnectionStatus;
   checkSupabaseConnection: (customUrl?: string, customKey?: string) => Promise<SupabaseConnectionStatus>;
   loginWithRole: (role: UserRole) => void;
+  loginWithUserProfile: (user: UserProfile) => void;
   loginWithEmail: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
   registerWithEmail: (email: string, pass: string, fullName: string, role: UserRole, nip?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   updateCurrentUserProfile: (profile: Partial<UserProfile>) => void;
   allUsersList: UserProfile[];
   updateUserRoleByAdmin: (userId: string, newRole: UserRole) => void;
+  addNewUserByAdmin: (user: { name: string; email: string; roleKey: UserRole; nip?: string; department?: string; phone?: string; defaultPassword?: string }) => UserProfile;
+  updateUserByAdmin: (userId: string, updates: Partial<UserProfile>) => void;
+  deleteUserByAdmin: (userId: string) => { success: boolean; error?: string };
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -119,6 +123,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCurrentUser(user);
       setIsLoggedIn(true);
     }
+  };
+
+  const loginWithUserProfile = (user: UserProfile) => {
+    setCurrentUser(user);
+    setIsLoggedIn(true);
   };
 
   const loginWithEmail = async (email: string, pass: string): Promise<{ success: boolean; error?: string }> => {
@@ -298,6 +307,124 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // 1. Tambah Akun Pengguna Baru oleh Admin
+  const addNewUserByAdmin = (userData: { 
+    name: string; 
+    email: string; 
+    roleKey: UserRole; 
+    nip?: string; 
+    department?: string; 
+    phone?: string; 
+    defaultPassword?: string 
+  }): UserProfile => {
+    const initials = userData.name
+      .split(' ')
+      .filter(Boolean)
+      .map((part) => part[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || 'SR';
+
+    const newUser: UserProfile = {
+      id: 'usr-' + userData.roleKey + '-' + Date.now(),
+      name: userData.name.trim(),
+      email: userData.email.trim().toLowerCase(),
+      nip: userData.nip?.trim() || '-',
+      phone: userData.phone?.trim() || '',
+      department: userData.department?.trim() || 'Sekolah Rakyat Terintegerasi 1 Sumedang',
+      role: USER_ROLES[userData.roleKey]?.label || userData.roleKey,
+      roleKey: userData.roleKey,
+      avatarInitials: initials,
+    };
+
+    setAllUsersList((prev) => {
+      // Periksa apakah email sudah ada
+      const existing = prev.find((u) => u.email.toLowerCase() === newUser.email.toLowerCase());
+      if (existing) {
+        return prev.map((u) => (u.id === existing.id ? { ...u, ...newUser, id: existing.id } : u));
+      }
+      return [...prev, newUser];
+    });
+
+    return newUser;
+  };
+
+  // 2. Ubah Data Pengguna (Nama, Jabatan/Role, NIP, Phone, dsb.) oleh Admin
+  const updateUserByAdmin = (userId: string, updates: Partial<UserProfile>) => {
+    setAllUsersList((prev) =>
+      prev.map((u) => {
+        if (u.id === userId) {
+          const roleKey = updates.roleKey || u.roleKey;
+          const roleLabel = updates.role || (updates.roleKey ? USER_ROLES[updates.roleKey]?.label : u.role);
+          const name = updates.name !== undefined ? updates.name.trim() : u.name;
+          const initials = name
+            .split(' ')
+            .filter(Boolean)
+            .map((part) => part[0])
+            .join('')
+            .slice(0, 2)
+            .toUpperCase() || u.avatarInitials;
+
+          return {
+            ...u,
+            ...updates,
+            name,
+            roleKey,
+            role: roleLabel,
+            avatarInitials: initials,
+          };
+        }
+        return u;
+      })
+    );
+
+    // Jika yang diubah adalah akun admin yang sedang login
+    if (currentUser.id === userId) {
+      setCurrentUser((prev) => {
+        const roleKey = updates.roleKey || prev.roleKey;
+        const roleLabel = updates.role || (updates.roleKey ? USER_ROLES[updates.roleKey]?.label : prev.role);
+        const name = updates.name !== undefined ? updates.name.trim() : prev.name;
+        const initials = name
+          .split(' ')
+          .filter(Boolean)
+          .map((part) => part[0])
+          .join('')
+          .slice(0, 2)
+          .toUpperCase() || prev.avatarInitials;
+
+        return {
+          ...prev,
+          ...updates,
+          name,
+          roleKey,
+          role: roleLabel,
+          avatarInitials: initials,
+        };
+      });
+    }
+  };
+
+  // 3. Hapus Pengguna oleh Admin
+  const deleteUserByAdmin = (userId: string): { success: boolean; error?: string } => {
+    if (currentUser.id === userId) {
+      return { success: false, error: 'Tidak dapat menghapus akun yang sedang Anda gunakan saat ini.' };
+    }
+
+    const targetUser = allUsersList.find((u) => u.id === userId);
+    if (!targetUser) {
+      return { success: false, error: 'Pengguna tidak ditemukan.' };
+    }
+
+    // Pastikan tidak menghapus seluruh admin jika hanya ada 1 admin
+    const adminCount = allUsersList.filter((u) => u.roleKey === 'admin').length;
+    if (targetUser.roleKey === 'admin' && adminCount <= 1) {
+      return { success: false, error: 'Sistem harus memiliki minimal satu akun Administrator.' };
+    }
+
+    setAllUsersList((prev) => prev.filter((u) => u.id !== userId));
+    return { success: true };
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -309,12 +436,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         supabaseStatus,
         checkSupabaseConnection,
         loginWithRole,
+        loginWithUserProfile,
         loginWithEmail,
         registerWithEmail,
         logout,
         updateCurrentUserProfile,
         allUsersList,
         updateUserRoleByAdmin,
+        addNewUserByAdmin,
+        updateUserByAdmin,
+        deleteUserByAdmin,
       }}
     >
       {children}

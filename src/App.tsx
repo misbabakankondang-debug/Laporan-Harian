@@ -26,7 +26,8 @@ import {
 import { 
   getSupabaseClient, 
   mapDbReportToReportItem, 
-  mapReportItemToDbRow 
+  mapReportItemToDbRow,
+  logAuditEvent 
 } from './lib/supabase';
 
 function SIBAHARAppContent() {
@@ -100,7 +101,7 @@ function SIBAHARAppContent() {
     localStorage.setItem('sibahar_notifs', JSON.stringify(notifications));
   }, [notifications]);
 
-  // Sync with Supabase Database if connected
+  // Sync with Supabase Database and listen to Realtime changes
   useEffect(() => {
     const client = getSupabaseClient();
     if (!client || !isSupabaseConnected) return;
@@ -126,8 +127,53 @@ function SIBAHARAppContent() {
 
     fetchSupabaseReports();
 
+    // Supabase Realtime Channel
+    const channel = client
+      .channel('sibahar_realtime_channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'reports' },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT' && payload.new) {
+            const mapped = mapDbReportToReportItem(payload.new);
+            setReports((prev) => {
+              if (prev.some((r) => r.id === mapped.id)) return prev;
+              return [mapped, ...prev];
+            });
+          } else if (payload.eventType === 'UPDATE' && payload.new) {
+            const mapped = mapDbReportToReportItem(payload.new);
+            setReports((prev) =>
+              prev.map((r) => (r.id === mapped.id ? mapped : r))
+            );
+          } else if (payload.eventType === 'DELETE' && payload.old) {
+            const deletedId = payload.old.id;
+            setReports((prev) => prev.filter((r) => r.id !== deletedId));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications' },
+        (payload: any) => {
+          if (payload.new) {
+            const newNotif: NotificationItem = {
+              id: payload.new.id || 'notif-' + Date.now(),
+              title: payload.new.title,
+              message: payload.new.message,
+              time: 'Baru saja',
+              read: payload.new.read || false,
+              type: payload.new.type || 'system',
+              reportId: payload.new.report_id,
+            };
+            setNotifications((prev) => [newNotif, ...prev]);
+          }
+        }
+      )
+      .subscribe();
+
     return () => {
       isMounted = false;
+      client.removeChannel(channel);
     };
   }, [isSupabaseConnected]);
 
@@ -193,18 +239,42 @@ function SIBAHARAppContent() {
         });
     }
 
-    // Add user notification
+    // Add user notification & automated notification for Kepala Sekolah
     const senderRoleLabel = USER_ROLES[currentUser.roleKey]?.label || currentUser.role;
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
-      title: `Laporan Baru [${senderRoleLabel}]`,
-      message: `Tiket #${ticketId} ("${newReport.title.slice(0, 35)}...") berhasil dikirim oleh ${currentUser.name} ke antrean pusat pengawasan SIBAHAR.`,
+      title: `Laporan Terkirim [${senderRoleLabel}]`,
+      message: `Tiket #${ticketId} ("${newReport.title.slice(0, 35)}...") berhasil diajukan oleh ${currentUser.name} ke sistem SIBAHAR.`,
       time: 'Baru saja',
       read: false,
       type: 'system',
       reportId: ticketId,
     };
-    setNotifications((prev) => [newNotif, ...prev]);
+
+    // Otomatis kirim notifikasi masuk ke Akun Kepala Sekolah
+    const kepsekNotif: NotificationItem = {
+      id: 'notif-kepsek-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      title: `Laporan Masuk: [${senderRoleLabel}]`,
+      message: `Laporan baru masuk dari ${currentUser.name} (${senderRoleLabel} — NIP: ${currentUser.nip || '-'}): "${newReport.title}". Laporan otomatis masuk ke antrean pengawasan Anda.`,
+      time: 'Baru saja',
+      read: false,
+      type: 'new_report',
+      reportId: ticketId,
+      recipientRole: 'kepala_sekolah',
+    };
+
+    setNotifications((prev) => [newNotif, kepsekNotif, ...prev]);
+
+    // Record audit event
+    logAuditEvent({
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userRole: currentUser.roleKey,
+      action: 'CREATE_REPORT',
+      resourceType: 'reports',
+      resourceId: ticketId,
+      details: { title: newReport.title, category: newReport.category, priority: newReport.priority }
+    });
 
     return newReport;
   };
@@ -282,6 +352,17 @@ function SIBAHARAppContent() {
       reportId: updatedReport.id,
     };
     setNotifications((prev) => [newNotif, ...prev]);
+
+    // Record audit event
+    logAuditEvent({
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userRole: currentUser.roleKey,
+      action: 'UPDATE_REPORT',
+      resourceType: 'reports',
+      resourceId: updatedReport.id,
+      details: { title: updatedReport.title, status: updatedReport.status }
+    });
   };
 
   const handleDeleteReport = (reportId: string) => {
@@ -311,6 +392,17 @@ function SIBAHARAppContent() {
       type: 'system',
     };
     setNotifications((prev) => [newNotif, ...prev]);
+
+    // Record audit event
+    logAuditEvent({
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userRole: currentUser.roleKey,
+      action: 'DELETE_REPORT',
+      resourceType: 'reports',
+      resourceId: reportId,
+      details: {}
+    });
   };
 
   const handleDeleteReportsByRange = (startDate: string, endDate: string) => {
@@ -341,6 +433,17 @@ function SIBAHARAppContent() {
       type: 'system',
     };
     setNotifications((prev) => [newNotif, ...prev]);
+
+    // Record audit event
+    logAuditEvent({
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userRole: currentUser.roleKey,
+      action: 'DELETE_REPORTS_RANGE',
+      resourceType: 'reports',
+      resourceId: 'BULK',
+      details: { startDate, endDate, count }
+    });
   };
 
   const handleUpdateStatus = (reportId: string, newStatus: ReportStatus, note?: string) => {
@@ -403,6 +506,17 @@ function SIBAHARAppContent() {
       reportId,
     };
     setNotifications((prev) => [newNotif, ...prev]);
+
+    // Record audit event
+    logAuditEvent({
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userRole: currentUser.roleKey,
+      action: 'UPDATE_STATUS',
+      resourceType: 'reports',
+      resourceId: reportId,
+      details: { newStatus, note }
+    });
   };
 
   const handleAddNote = (reportId: string, note: string) => {

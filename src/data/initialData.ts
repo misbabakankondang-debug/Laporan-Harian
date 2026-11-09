@@ -62,6 +62,19 @@ export const DEFAULT_ROLE_USERS: Record<UserRole, UserProfile & { defaultPasswor
     avatarInitials: 'BS',
     defaultPassword: 'password123',
   },
+  tenaga_keamanan: {
+    id: 'usr-keamanan-001',
+    name: 'Agus Supriyanto',
+    nip: '19810214 201004 1 008',
+    email: 'keamanan@srt1sumedang.sch.id',
+    phone: '0896-2345-6789',
+    department: 'Unit Keamanan & Ketertiban Lingkungan',
+    role: 'Komandan Regu Tenaga Keamanan',
+    roleKey: 'tenaga_keamanan',
+    avatarInitials: 'AS',
+    defaultPassword: 'password123',
+    isActive: true,
+  },
   keamanan: {
     id: 'usr-keamanan-001',
     name: 'Agus Supriyanto',
@@ -70,9 +83,10 @@ export const DEFAULT_ROLE_USERS: Record<UserRole, UserProfile & { defaultPasswor
     phone: '0896-2345-6789',
     department: 'Unit Keamanan & Ketertiban Lingkungan',
     role: 'Komandan Regu Tenaga Keamanan',
-    roleKey: 'keamanan',
+    roleKey: 'tenaga_keamanan',
     avatarInitials: 'AS',
     defaultPassword: 'password123',
+    isActive: true,
   },
   kepala_sekolah: {
     id: 'usr-kepala-001',
@@ -85,6 +99,7 @@ export const DEFAULT_ROLE_USERS: Record<UserRole, UserProfile & { defaultPasswor
     roleKey: 'kepala_sekolah',
     avatarInitials: 'CK',
     defaultPassword: 'password123',
+    isActive: true,
   },
 };
 

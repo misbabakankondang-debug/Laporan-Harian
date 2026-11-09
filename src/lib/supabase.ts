@@ -2,7 +2,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ReportItem, UserProfile, UserRole } from '../types/report';
 
 const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const envAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const envAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 // Membersihkan string kredensial dari spasi dan tanda kutip yang tidak disengaja
 export const cleanCredentialString = (val: string | null | undefined): string => {
@@ -320,3 +320,35 @@ export const mapReportItemToDbRow = (item: ReportItem, userId: string, userRole:
     updated_at: new Date().toISOString(),
   };
 };
+
+// Helper: Catat riwayat ke tabel audit_logs
+export async function logAuditEvent(params: {
+  userId?: string;
+  userRole?: string;
+  userName?: string;
+  userEmail?: string;
+  action: string;
+  entityType?: string;
+  resourceType?: string;
+  entityId?: string;
+  resourceId?: string;
+  details?: any;
+}): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) return;
+
+  try {
+    await client.from('audit_logs').insert({
+      user_id: params.userId || null,
+      user_role: params.userRole || null,
+      user_name: params.userName || params.userEmail || null,
+      action: params.action,
+      entity_type: params.entityType || params.resourceType || 'general',
+      entity_id: params.entityId || params.resourceId || 'unknown',
+      details: params.details || null,
+      created_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('Gagal mencatat audit log ke Supabase:', err);
+  }
+}

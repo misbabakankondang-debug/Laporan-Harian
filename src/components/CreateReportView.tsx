@@ -57,10 +57,10 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
 
-  // Penanggung Jawab / Laporan dari (Ditulis Manual)
-  const [picName, setPicName] = useState(userProfile.name);
-  const [picRole, setPicRole] = useState(userProfile.role);
-  const [picNip, setPicNip] = useState(userProfile.nip || '19740512 200212 1 003');
+  // Penanggung Jawab otomatis terisi dari akun profil pengguna yang sedang login
+  const picName = userProfile.name;
+  const picRole = userProfile.role;
+  const picNip = userProfile.nip || '';
 
   // Auto-set priority & description to "Nihil" when category is "Nihil"
   const handleCategorySelect = (selectedCat: ReportCategory | '') => {
@@ -244,9 +244,6 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     setDescription('');
     setAttachments([]);
     setEditingDraftId(null);
-    setPicName(userProfile.name);
-    setPicRole(userProfile.role);
-    setPicNip(userProfile.nip || '19740512 200212 1 003');
     setErrors({});
   };
 
@@ -259,9 +256,6 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     setDescription(draft.description);
     setAttachments(draft.attachments || []);
     setEditingDraftId(draft.id);
-    if (draft.picName) setPicName(draft.picName);
-    if (draft.picRole) setPicRole(draft.picRole);
-    if (draft.picNip) setPicNip(draft.picNip);
     setShowDraftModal(false);
   };
 
@@ -473,56 +467,6 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
             </div>
           </div>
 
-          {/* Requirement 4: Penanggung Jawab / Laporan dari (Nama, Jabatan, NIP ditulis manual) */}
-          <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200 space-y-3">
-            <div className="flex items-center justify-between flex-wrap gap-1">
-              <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
-                Penanggung Jawab / Laporan dari (Ditulis Manual)
-              </label>
-              <span className="text-[10.5px] text-slate-500">
-                Dapat disesuaikan dengan pejabat pelapor hari ini
-              </span>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  Nama Penanggung Jawab <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={picName}
-                  onChange={(e) => setPicName(e.target.value)}
-                  placeholder="Nama lengkap &amp; gelar"
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-indigo-500 text-xs bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  Jabatan Penanggung Jawab <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={picRole}
-                  onChange={(e) => setPicRole(e.target.value)}
-                  placeholder="Jabatan"
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-indigo-500 text-xs bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  NIP Penanggung Jawab <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={picNip}
-                  onChange={(e) => setPicNip(e.target.value)}
-                  placeholder="NIP. xxxxxxxxx xxxxx x xxx"
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-indigo-500 text-xs bg-white font-mono"
-                />
-              </div>
-            </div>
-          </div>
-
           {/* Tanggal Kejadian & Lokasi (2 Kolom) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -696,8 +640,11 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
 
           {/* Tombol Aksi */}
           <div className="flex items-center justify-between pt-4 border-t border-slate-100 flex-wrap gap-3">
-            <div className="text-xs text-slate-500">
-              Pelapor: <span className="font-semibold text-slate-700">{userProfile.name}</span> ({userProfile.department})
+            <div className="text-xs text-slate-600 bg-emerald-50/70 border border-emerald-100 rounded-lg px-3 py-1.5 flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span>
+                Penanggung Jawab Otomatis: <strong className="text-slate-800">{userProfile.name}</strong> ({userProfile.role} — NIP: {userProfile.nip || '-'})
+              </span>
             </div>
 
             <div className="flex items-center gap-3">
