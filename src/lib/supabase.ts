@@ -2,7 +2,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ReportItem, UserProfile, UserRole } from '../types/report';
 
 const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const envAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const envAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 // Membersihkan string kredensial dari spasi dan tanda kutip yang tidak disengaja
 export const cleanCredentialString = (val: string | null | undefined): string => {
