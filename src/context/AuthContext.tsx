@@ -422,8 +422,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     // TAMBAHKAN PERINTAH SUPABASE DI SINI
-    const supabase = getSupabaseClient();
-const { error: dbError } = await supabase
+    const { error: dbError } = await getSupabaseClient()
   .from('profiles')
   .delete()
   .eq('id', userId);
