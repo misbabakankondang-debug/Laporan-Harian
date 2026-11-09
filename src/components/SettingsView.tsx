@@ -388,15 +388,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setEditingUser(null);
   };
 
-  const handleConfirmDeleteUser = () => {
-    if (!deletingUser) return;
-    const targetDeleteId = deletingUser.id || deletingUser.email;
-    const res = deleteUserByAdmin(targetDeleteId);
-    if (!res.success) {
-      alert(res.error || 'Gagal menghapus pengguna.');
-    }
-    setDeletingUser(null);
-  };
+  const handleConfirmDeleteUser = async () => {
+  if (!deletingUser) return;
+  const targetDeleteId = deletingUser.id;
+  
+  const { error } = await supabase
+    .from('profiles')
+    .delete()
+    .eq('id', targetDeleteId);
+
+  if (error) {
+    alert('Gagal menghapus pengguna: ' + error.message);
+  } else {
+    alert('Pengguna berhasil dihapus.');
+    // Muat ulang data atau perbarui state lokal di sini jika diperlukan
+  }
+  setDeletingUser(null);
+};
 
   const sqlSchemaSnippet = FULL_SUPABASE_SCHEMA_SQL;
 
