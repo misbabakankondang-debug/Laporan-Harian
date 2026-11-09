@@ -422,10 +422,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     // TAMBAHKAN PERINTAH SUPABASE DI SINI
-    const { error: dbError } = await supabase
-      .from('profiles') // Sesuaikan nama tabel Anda jika berbeda (misal: 'users' atau 'profiles')
-      .delete()
-      .eq('id', userId);
+    const supabase = getSupabaseClient();
+const { error: dbError } = await supabase
+  .from('profiles')
+  .delete()
+  .eq('id', userId);
 
     if (dbError) {
       return { success: false, error: dbError.message };
