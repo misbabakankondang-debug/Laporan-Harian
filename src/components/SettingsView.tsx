@@ -391,7 +391,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleConfirmDeleteUser = async () => {
   if (!deletingUser) return;
-  const targetDeleteId = deletingUser.id;
+  const targetDeleteId = deletingUser.id || deletingUser.user_id || deletingUser.uid;
   
   const { error } = await supabase
     .from('profiles')
