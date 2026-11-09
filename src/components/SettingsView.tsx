@@ -393,6 +393,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   if (!deletingUser) return;
   const targetDeleteId = deletingUser.id || deletingUser.user_id || deletingUser.uid;
   
+  if (!targetDeleteId) {
+    alert("Gagal menghapus: ID pengguna tidak ditemukan.");
+    return;
+  }
+
   const { error } = await supabase
     .from('profiles')
     .delete()
@@ -402,7 +407,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     alert('Gagal menghapus pengguna: ' + error.message);
   } else {
     alert('Pengguna berhasil dihapus.');
-    // Muat ulang data atau perbarui state lokal di sini jika diperlukan
   }
   setDeletingUser(null);
 };
