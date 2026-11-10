@@ -311,7 +311,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const url = `${window.location.origin}${window.location.pathname}?portal=user`;
+                  const url = `${window.location.origin}${window.location.pathname}?portal=staf`;
                   navigator.clipboard.writeText(url);
                   setCopiedLink(true);
                   setTimeout(() => setCopiedLink(false), 2000);
@@ -319,7 +319,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="text-emerald-700 hover:text-emerald-800 font-semibold flex items-center gap-1 cursor-pointer"
               >
                 {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedLink ? 'Link Tersalin!' : 'Salin Link Pengguna'}</span>
+                <span>{copiedLink ? 'Link Tersalin!' : 'Salin Link Staf & Kepala Sekolah'}</span>
               </button>
               <button
                 onClick={() => setShowRoleModal(false)}

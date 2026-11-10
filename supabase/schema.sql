@@ -30,10 +30,13 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     phone TEXT,
     department TEXT DEFAULT 'Sekolah Rakyat Terintegerasi 1 Sumedang',
     avatar_initials TEXT DEFAULT 'SR',
+    avatar_url TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
@@ -345,3 +348,100 @@ WITH CHECK (bucket_id = 'report-attachments');
 CREATE POLICY "Allow public read attachments"
 ON storage.objects FOR SELECT TO authenticated
 USING (bucket_id = 'report-attachments');
+
+-- ==============================================================================
+-- 12. RPC FUNCTION: Hapus Pengguna oleh Admin (Aman dengan Verifikasi Hak Admin)
+-- ==============================================================================
+CREATE OR REPLACE FUNCTION public.delete_user_profile(target_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+    target_uuid UUID;
+    caller_role user_role_type;
+    target_role user_role_type;
+    admin_count INT;
+BEGIN
+    -- 1. Validasi format UUID
+    BEGIN
+        target_uuid := target_id::UUID;
+    EXCEPTION WHEN OTHERS THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Format ID target tidak valid (harus berupa UUID).');
+    END;
+
+    -- 2. Cek autentikasi penyeru
+    IF auth.uid() IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Tidak terotentikasi. Silakan login terlebih dahulu.');
+    END IF;
+
+    -- 3. Verifikasi hak penyeru (hanya role admin)
+    SELECT role INTO caller_role FROM public.profiles WHERE id = auth.uid() AND is_active = true;
+    IF caller_role IS NULL OR caller_role <> 'admin' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Akses ditolak: Hanya akun Administrator yang berwenang menghapus pengguna.');
+    END IF;
+
+    -- 4. Cegah menghapus akun yang sedang digunakan
+    IF auth.uid() = target_uuid THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Tidak dapat menghapus akun Administrator yang sedang aktif digunakan.');
+    END IF;
+
+    -- 5. Ambil data role target
+    SELECT role INTO target_role FROM public.profiles WHERE id = target_uuid;
+    IF target_role IS NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = target_uuid) THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Pengguna target tidak ditemukan di sistem.');
+        END IF;
+    END IF;
+
+    -- 6. Cegah menghapus akun Admin terakhir
+    IF target_role = 'admin' THEN
+        SELECT COUNT(*) INTO admin_count FROM public.profiles WHERE role = 'admin' AND is_active = true;
+        IF admin_count <= 1 THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Sistem harus memiliki minimal satu akun Administrator aktif.');
+        END IF;
+    END IF;
+
+    -- 7. Hapus dari public.profiles dan auth.users
+    DELETE FROM public.profiles WHERE id = target_uuid;
+    DELETE FROM auth.users WHERE id = target_uuid;
+
+    -- 8. Catat ke audit_logs
+    INSERT INTO public.audit_logs (user_id, user_role, action, entity_type, entity_id, details)
+    VALUES (
+        auth.uid(),
+        'admin',
+        'ADMIN_DELETE_USER',
+        'profiles',
+        target_id,
+        jsonb_build_object('deleted_user_id', target_id, 'deleted_at', now())
+    );
+
+    RETURN jsonb_build_object('success', true, 'message', 'Pengguna berhasil dihapus secara permanen dari database Supabase.');
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$$;
+
+-- Alias untuk penanganan parameter tipe UUID langsung
+CREATE OR REPLACE FUNCTION public.delete_user_profile(target_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+BEGIN
+    RETURN public.delete_user_profile(target_id::TEXT);
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.delete_user_profile(TEXT) FROM public;
+REVOKE EXECUTE ON FUNCTION public.delete_user_profile(TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.delete_user_profile(TEXT) TO authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.delete_user_profile(UUID) FROM public;
+REVOKE EXECUTE ON FUNCTION public.delete_user_profile(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.delete_user_profile(UUID) TO authenticated;
+

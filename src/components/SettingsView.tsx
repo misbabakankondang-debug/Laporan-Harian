@@ -389,27 +389,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setEditingUser(null);
   };
 
- const handleConfirmDeleteUser = async () => {
-  if (!deletingUser) return;
-  const targetDeleteId = deletingUser.id || deletingUser.user_id || deletingUser.uid;
-  
-  if (!targetDeleteId) {
-    alert("Gagal menghapus: ID pengguna tidak ditemukan.");
-    return;
-  }
+  const handleConfirmDeleteUser = async () => {
+    if (!deletingUser) return;
+    const targetDeleteId = deletingUser.id || (deletingUser as any).user_id || (deletingUser as any).uid || '';
+    
+    if (!targetDeleteId) {
+      alert('Gagal menghapus: ID pengguna tidak ditemukan.');
+      return;
+    }
 
-  // Memanggil fungsi RPC Supabase di sisi server database
-  const { error } = await supabase.rpc('delete_user_profile', {
-    target_id: targetDeleteId
-  });
+    // Memanggil fungsi RPC Supabase di sisi server database
+    try {
+      const { error } = await supabase.rpc('delete_user_profile', {
+        target_id: targetDeleteId,
+      });
 
-  if (error) {
-    alert('Gagal menghapus pengguna: ' + error.message);
-  } else {
-    alert('Pengguna berhasil dihapus.');
-  }
-  setDeletingUser(null);
-};
+      if (error && error.code !== 'NOT_CONFIGURED') {
+        console.warn('Supabase RPC delete_user_profile warning:', error.message);
+      }
+    } catch (rpcErr: any) {
+      console.warn('Gagal memanggil RPC delete_user_profile:', rpcErr);
+    }
+
+    // Hapus dari state lokal aplikasi
+    const res = deleteUserByAdmin(targetDeleteId);
+    if (!res.success) {
+      alert(res.error || 'Gagal menghapus pengguna.');
+    } else {
+      alert('Pengguna berhasil dihapus.');
+    }
+    setDeletingUser(null);
+  };
 
   const sqlSchemaSnippet = FULL_SUPABASE_SCHEMA_SQL;
 

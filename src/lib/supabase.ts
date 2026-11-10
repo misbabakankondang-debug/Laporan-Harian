@@ -2,7 +2,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ReportItem, UserProfile, UserRole } from '../types/report';
 
 const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const envAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const envAnonKey = 
+  import.meta.env.VITE_SUPABASE_ANON_KEY || 
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || 
+  '';
 
 // Membersihkan string kredensial dari spasi dan tanda kutip yang tidak disengaja
 export const cleanCredentialString = (val: string | null | undefined): string => {
@@ -352,4 +355,78 @@ export async function logAuditEvent(params: {
     console.warn('Gagal mencatat audit log ke Supabase:', err);
   }
 }
-export const supabase = createClient(envUrl, envAnonKey);
+/**
+ * Safe Supabase Client Proxy:
+ * Mencegah error "Invalid supabaseUrl: Provided URL is malformed" saat VITE_SUPABASE_URL kosong / belum disetel.
+ * Proxy ini secara dinamis menggunakan klien Supabase aktif (dari env vars atau localStorage via getSupabaseClient()).
+ * Jika Supabase belum terhubung, proxy mengembalikan penanganan aman (mock/no-op) sehingga seluruh UI aplikasi tetap dapat tampil lancar.
+ */
+export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_target, prop: string | symbol) {
+    const client = getSupabaseClient();
+    if (client) {
+      const val = (client as any)[prop];
+      if (typeof val === 'function') {
+        return val.bind(client);
+      }
+      return val;
+    }
+
+    // Fallback aman ketika Supabase belum terhubung
+    if (prop === 'rpc') {
+      return async (_fn: string, _args?: any) => {
+        return {
+          data: null,
+          error: {
+            message: 'Supabase belum dikonfigurasi. Silakan isi URL dan Key di Pengaturan SIBAHAR.',
+            code: 'NOT_CONFIGURED',
+          },
+        };
+      };
+    }
+
+    if (prop === 'from') {
+      return (_table: string) => {
+        const queryBuilder: any = {
+          select: () => queryBuilder,
+          insert: () => queryBuilder,
+          update: () => queryBuilder,
+          upsert: () => queryBuilder,
+          delete: () => queryBuilder,
+          eq: () => queryBuilder,
+          match: () => queryBuilder,
+          order: () => queryBuilder,
+          limit: () => queryBuilder,
+          single: () => Promise.resolve({ data: null, error: { message: 'Supabase belum terkonfigurasi' } }),
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+          then: (onfulfilled?: (res: any) => any, onrejected?: (err: any) => any) => {
+            const res = { data: [], error: null };
+            return Promise.resolve(res).then(onfulfilled, onrejected);
+          },
+        };
+        return queryBuilder;
+      };
+    }
+
+    if (prop === 'auth') {
+      return {
+        getSession: async () => ({ data: { session: null }, error: null }),
+        getUser: async () => ({ data: { user: null }, error: null }),
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
+        signInWithPassword: async () => ({ data: null, error: { message: 'Supabase belum terkonfigurasi' } }),
+        signUp: async () => ({ data: null, error: { message: 'Supabase belum terkonfigurasi' } }),
+        signOut: async () => ({ error: null }),
+      };
+    }
+
+    if (prop === 'channel') {
+      return () => ({
+        on: () => ({
+          subscribe: () => ({}),
+        }),
+      });
+    }
+
+    return () => ({ data: null, error: null });
+  },
+});

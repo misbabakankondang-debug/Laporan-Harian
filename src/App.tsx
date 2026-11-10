@@ -232,11 +232,16 @@ function SIBAHARAppContent() {
       client
         .from('reports')
         .insert(mapReportItemToDbRow(newReport, currentUser.id || 'usr-default', currentUser.roleKey || 'guru'))
-        .then(({ error }) => {
-          if (error) {
-            console.warn('Gagal sync insert ke Supabase:', error.message);
+        .then(
+          ({ error }) => {
+            if (error) {
+              console.warn('Gagal sync insert ke Supabase:', error.message);
+            }
+          },
+          (err: any) => {
+            console.warn('Supabase insert network warning (Failed to fetch):', err?.message || err);
           }
-        });
+        );
     }
 
     // Add user notification & automated notification for Kepala Sekolah
@@ -337,9 +342,14 @@ function SIBAHARAppContent() {
           updatedReport.userRole || currentUser.roleKey || 'guru'
         ))
         .eq('id', updatedReport.id)
-        .then(({ error }) => {
-          if (error) console.warn('Supabase update error:', error.message);
-        });
+        .then(
+          ({ error }) => {
+            if (error) console.warn('Supabase update error:', error.message);
+          },
+          (err: any) => {
+            console.warn('Supabase update network warning (Failed to fetch):', err?.message || err);
+          }
+        );
     }
 
     const newNotif: NotificationItem = {
@@ -378,9 +388,14 @@ function SIBAHARAppContent() {
         .from('reports')
         .delete()
         .eq('id', reportId)
-        .then(({ error }) => {
-          if (error) console.warn('Supabase delete error:', error.message);
-        });
+        .then(
+          ({ error }) => {
+            if (error) console.warn('Supabase delete error:', error.message);
+          },
+          (err: any) => {
+            console.warn('Supabase delete network warning (Failed to fetch):', err?.message || err);
+          }
+        );
     }
 
     const newNotif: NotificationItem = {
@@ -484,9 +499,14 @@ function SIBAHARAppContent() {
               .from('reports')
               .update({ status: newStatus, logs: updated.logs, updated_at: now.toISOString() })
               .eq('id', reportId)
-              .then(({ error }) => {
-                if (error) console.warn('Supabase status update error:', error.message);
-              });
+              .then(
+                ({ error }) => {
+                  if (error) console.warn('Supabase status update error:', error.message);
+                },
+                (err: any) => {
+                  console.warn('Supabase status update network warning (Failed to fetch):', err?.message || err);
+                }
+              );
           }
 
           return updated;
@@ -548,9 +568,14 @@ function SIBAHARAppContent() {
               .from('reports')
               .update({ logs: updatedLogs, updated_at: now.toISOString() })
               .eq('id', reportId)
-              .then(({ error }) => {
-                if (error) console.warn('Supabase log note update error:', error.message);
-              });
+              .then(
+                ({ error }) => {
+                  if (error) console.warn('Supabase log note update error:', error.message);
+                },
+                (err: any) => {
+                  console.warn('Supabase log note update network warning (Failed to fetch):', err?.message || err);
+                }
+              );
           }
 
           return {

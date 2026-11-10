@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShieldCheck, 
   Lock, 
@@ -41,20 +41,39 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
     allUsersList 
   } = useAuth();
   
-  // Detect portal parameter from URL (?portal=user or ?portal=admin)
+  // Detect portal parameter from URL (?portal=staf, ?portal=user, or default admin)
   const [portalType, setPortalType] = useState<'admin' | 'user'>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const p = params.get('portal');
-      if (p === 'user') return 'user';
+      if (p === 'user' || p === 'staf' || p === 'staff' || p === 'pegawai') return 'user';
       return 'admin'; // Default (link sekarang) adalah khusus untuk admin
     } catch {
       return 'admin';
     }
   });
 
-  // Filter out admin from general user lists for clean separation
-  const operationalUsers = allUsersList.filter((u) => u.roleKey !== 'admin');
+  // Filter out admin from general user lists and ensure exactly ONE Tenaga Keamanan
+  const operationalUsers = useMemo<UserProfile[]>(() => {
+    const list = allUsersList.filter((u: UserProfile) => u.roleKey !== 'admin');
+    const result: UserProfile[] = [];
+    const seenRoles = new Set<string>();
+    const seenEmails = new Set<string>();
+
+    list.forEach((u: UserProfile) => {
+      // Tenaga Keamanan hanya satu saja
+      if (u.roleKey === 'tenaga_keamanan' || (u.roleKey as string) === 'keamanan') {
+        if (seenRoles.has('tenaga_keamanan')) return;
+        seenRoles.add('tenaga_keamanan');
+      }
+      const email = u.email.toLowerCase();
+      if (!seenEmails.has(email)) {
+        seenEmails.add(email);
+        result.push(u);
+      }
+    });
+    return result;
+  }, [allUsersList]);
   
   // Default selected user for the Staff Form (defaults to Kepala Sekolah)
   const defaultKepsek = allUsersList.find((u) => u.roleKey === 'kepala_sekolah') || DEFAULT_ROLE_USERS.kepala_sekolah;
@@ -91,7 +110,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
     try {
       const url = new URL(window.location.href);
       if (newPortal === 'user') {
-        url.searchParams.set('portal', 'user');
+        url.searchParams.set('portal', 'staf');
       } else {
         url.searchParams.delete('portal');
       }
@@ -105,9 +124,9 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
     try {
       const origin = window.location.origin;
       const pathname = window.location.pathname;
-      return `${origin}${pathname}?portal=user`;
+      return `${origin}${pathname}?portal=staf`;
     } catch {
-      return '?portal=user';
+      return '?portal=staf';
     }
   };
 
@@ -353,7 +372,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
                     onChange={(e) => handleSelectStaffUser(e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-emerald-300 bg-white font-medium text-slate-800 focus:outline-hidden focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 text-xs sm:text-sm"
                   >
-                    {operationalUsers.map((u) => {
+                    {operationalUsers.map((u: UserProfile) => {
                       const roleLabel = USER_ROLES[u.roleKey]?.label || u.role;
                       return (
                         <option key={u.id || u.email} value={u.id || u.email}>
@@ -535,7 +554,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
 
               {/* Kartu Pengguna Lainnya (Wali Asrama, Wali Asuh, Guru, Keamanan) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                {operationalUsers.filter((u) => u.roleKey !== 'kepala_sekolah').map((u) => {
+                {operationalUsers.filter((u: UserProfile) => u.roleKey !== 'kepala_sekolah').map((u: UserProfile) => {
                   const roleInfo = USER_ROLES[u.roleKey] || { label: u.role, badgeClass: 'bg-slate-100 text-slate-700' };
                   return (
                     <button
