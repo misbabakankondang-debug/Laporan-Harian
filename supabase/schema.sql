@@ -87,9 +87,12 @@ CREATE TABLE IF NOT EXISTS public.reports (
     attachment_url TEXT,
     attachments JSONB DEFAULT '[]'::jsonb,
     logs JSONB DEFAULT '[]'::jsonb,
+    reporter_signature TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reporter_signature TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON public.reports(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_incident_date ON public.reports(incident_date DESC);

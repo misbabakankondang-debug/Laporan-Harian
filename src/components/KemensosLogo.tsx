@@ -1,10 +1,29 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface KemensosLogoProps {
   className?: string;
+  useImage?: boolean;
 }
 
-export const KemensosLogo: React.FC<KemensosLogoProps> = ({ className = 'w-16 h-16' }) => {
+export const KEMENSOS_LOGO_URL = 'https://vectorez.biz.id/wp-content/uploads/2024/05/Logo-Kementerian-Sosial-Kemensos-Republik-Indonesia@0.5x.png';
+
+export const KemensosLogo: React.FC<KemensosLogoProps> = ({ 
+  className = 'w-16 h-16',
+  useImage = true,
+}) => {
+  const [imgError, setImgError] = useState(false);
+
+  if (useImage && !imgError) {
+    return (
+      <img
+        src={KEMENSOS_LOGO_URL}
+        alt="Logo Kementerian Sosial Republik Indonesia"
+        className={`${className} object-contain`}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
   return (
     <svg
       viewBox="0 0 160 160"

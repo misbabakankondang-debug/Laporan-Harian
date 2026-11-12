@@ -48,6 +48,29 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
   const prio = priorityLabels[report.priority] || priorityLabels.sedang;
   const stat = statusLabels[report.status] || statusLabels.menunggu;
 
+  const isKepalaSekolahReport = 
+    report.userRole === 'kepala_sekolah' ||
+    (report.picRole && report.picRole.toLowerCase().includes('kepala sekolah')) ||
+    (report.reporterName && report.reporterName.toLowerCase().includes('cece enjang')) ||
+    (report.reporterNip && report.reporterNip.replace(/\s+/g, '') === '197807062005011011');
+
+  const defaultKopLogo = 'https://vectorez.biz.id/wp-content/uploads/2024/05/Logo-Kementerian-Sosial-Kemensos-Republik-Indonesia@0.5x.png';
+  const kopLogoSrc = appSettings?.kopLogoUrl || defaultKopLogo;
+  const kopAddress = appSettings?.kopAddress || 'Desa Kebon Cau, Kecamatan Ujung Jaya Kabupaten Sumedang Kode Pos 45383';
+
+  const getRoleLabel = () => {
+    if (isKepalaSekolahReport) return 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang';
+    if (report.picRole && report.picRole.trim()) return report.picRole;
+    if (report.reporterDept && report.reporterDept.trim()) return report.reporterDept;
+    if (report.userRole === 'wali_asrama') return 'Wali Asrama';
+    if (report.userRole === 'wali_asuh') return 'Wali Asuh';
+    if (report.userRole === 'guru') return 'Guru';
+    if (report.userRole === 'tenaga_keamanan' || report.userRole === 'keamanan') return 'Tenaga Keamanan';
+    if (report.userRole === 'admin') return 'Administrator Sistem';
+    return 'Staf / Petugas';
+  };
+  const reporterRoleLabel = getRoleLabel();
+
   const handleAddNoteSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newNote.trim()) return;
@@ -57,10 +80,8 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
 
   const handleStatusChangeSubmit = (newSt: ReportStatus) => {
     if (newSt === report.status) return;
-    const note = prompt(`Masukkan catatan perubahan status menjadi "${statusLabels[newSt]?.label}":`, 'Status diperbarui oleh pelapor/admin.');
-    if (note !== null) {
-      onUpdateStatus(report.id, newSt, note.trim() || undefined);
-    }
+    // Requirement 4: Tidak wajib mengisi catatan progres/tanggapan di akun manapun
+    onUpdateStatus(report.id, newSt, undefined);
   };
 
   const handlePrint = () => {
@@ -141,15 +162,15 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
             <div className="flex items-center justify-between gap-4">
               {/* Logo Kementerian Sosial Republik Indonesia di sebelah kiri */}
               <div className="shrink-0 flex items-center justify-center">
-                {appSettings?.kopLogoUrl ? (
-                  <img
-                    src={appSettings.kopLogoUrl}
-                    alt="Logo Kop Surat"
-                    className="w-18 h-18 sm:w-20 sm:h-20 object-contain"
-                  />
-                ) : (
-                  <KemensosLogo className="w-18 h-18 sm:w-20 sm:h-20" />
-                )}
+                <img
+                  src={kopLogoSrc}
+                  alt="Logo Kementerian Sosial RI"
+                  className="w-18 h-18 sm:w-20 sm:h-20 object-contain"
+                  onError={(e) => {
+                    // Fallback jika gambar URL bermasalah
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
               </div>
 
               {/* Teks Kop Surat */}
@@ -160,11 +181,11 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                 <h4 className="font-bold text-xs sm:text-sm text-slate-900 uppercase tracking-wide mt-0.5 leading-tight">
                   Sekolah Rakyat Terintegerasi 1 Sumedang
                 </h4>
-                <p className="text-[10.5px] font-semibold text-indigo-900 mt-1">
+                <p className="text-[10.5px] font-semibold text-emerald-800 mt-1">
                   Sistem Informasi Berita Aktual Harian (SIBAHAR)
                 </p>
                 <p className="text-[9.5px] text-slate-600 mt-0.5 leading-tight">
-                  {appSettings?.kopAddress || 'Jl. Raya Sumedang - Wado, Paseh, Kabupaten Sumedang, Jawa Barat 45311 | Pos-el: srt1sumedang@kemensos.go.id'}
+                  {kopAddress}
                 </p>
               </div>
             </div>
@@ -174,12 +195,21 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
             <div className="mt-0.5 border-t border-slate-700 w-full" />
           </div>
 
-          {/* Kepada : Yth. Menteri Sosial Republik Indonesia di Jakarta */}
+          {/* Kepada : Yth. Menteri Sosial RI (Kepsek) atau Yth. Kepala Sekolah (Staf) */}
           <div className="pt-1 pb-1 text-xs text-slate-900 flex justify-start">
             <div className="text-left leading-relaxed">
               <span className="text-slate-600 text-[11px] block">Kepada :</span>
-              <span className="font-bold text-slate-900 block text-xs sm:text-sm">Yth. Menteri Sosial Republik Indonesia</span>
-              <span className="text-slate-700 block text-xs">di Jakarta</span>
+              {isKepalaSekolahReport ? (
+                <>
+                  <span className="font-bold text-slate-900 block text-xs sm:text-sm">Yth. Menteri Sosial Republik Indonesia</span>
+                  <span className="text-slate-700 block text-xs">di Jakarta</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-bold text-slate-900 block text-xs sm:text-sm">Yth. Kepala Sekolah Rakyat Terintegerasi 1 Sumedang</span>
+                  <span className="text-slate-700 block text-xs">di Sumedang</span>
+                </>
+              )}
             </div>
           </div>
 
@@ -268,29 +298,18 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
           </div>
 
           {/* Info Grid (Pelapor, Lokasi, Penanggung Jawab / Laporan dari) */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+          {/* Info Grid (Pelapor & Lokasi) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
             <div>
               <span className="text-slate-500 block text-[11px] font-medium">Pelapor</span>
               <p className="font-semibold text-slate-900 mt-0.5">{report.reporterName}</p>
-              <p className="text-slate-600 text-[11px]">{report.reporterDept}</p>
+              <p className="text-slate-600 text-[11px]">{reporterRoleLabel}{report.reporterNip ? ` · NIP. ${report.reporterNip}` : ''}</p>
             </div>
             <div>
               <span className="text-slate-500 block text-[11px] font-medium">Lokasi / Area Kejadian</span>
               <p className="font-semibold text-slate-900 mt-0.5">
                 {report.location || 'Lingkungan Sekolah Rakyat 1 Sumedang'}
               </p>
-            </div>
-            <div>
-              <span className="text-slate-500 block text-[11px] font-medium">Penanggung Jawab / Laporan Dari</span>
-              <p className="font-semibold text-indigo-700 mt-0.5">
-                {report.picName || report.assignedTo || 'Tim Penanganan Terpadu'}
-              </p>
-              {report.picRole && (
-                <p className="text-slate-600 text-[11px]">{report.picRole}</p>
-              )}
-              {report.picNip && (
-                <p className="text-slate-500 text-[10px] font-mono">NIP. {report.picNip}</p>
-              )}
             </div>
           </div>
 
@@ -382,27 +401,25 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
             </div>
           </div>
 
-          {/* Lembar Pengesahan Tanda Tangan Resmi (Tampil pada cetak & pratinjau) */}
-          <div className="pt-6 border-t border-slate-300 grid grid-cols-2 gap-6 text-xs print:text-[11px] print:pt-4">
-            <div className="text-center">
-              <p className="text-slate-600 font-medium">Petugas Penanggung Jawab / Laporan Dari,</p>
-              <p className="text-slate-700 font-semibold">{report.picRole || report.assignedTo || 'Petugas Satgas / Guru'}</p>
-              <div className="h-14 flex items-end justify-center">
-                <p className="font-semibold text-slate-900 underline">{report.picName || report.assignedTo || 'Tim Satgas / BK'}</p>
-              </div>
-              <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
-                {report.picNip ? `NIP. ${report.picNip}` : 'Sekolah Rakyat Terintegerasi 1 Sumedang'}
-              </p>
-            </div>
-
-            <div className="text-center">
+          {/* Lembar Pengesahan Tanda Tangan Resmi (Sebelah Kanan) */}
+          <div className="pt-6 border-t border-slate-300 flex justify-end text-xs print:text-[11px] print:pt-4">
+            <div className="text-center w-64">
               <p className="text-slate-600">Sumedang, {printDate}</p>
-              <p className="text-slate-700 font-semibold">{userProfile?.role || 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang'}</p>
-              <div className="h-14 flex items-end justify-center">
-                <p className="font-bold text-slate-900 underline">{userProfile?.name || 'Cece Enjang Kartiwa, S.Pd.,MM'}</p>
+              <p className="text-slate-700 font-semibold">{isKepalaSekolahReport ? (userProfile?.role || 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang') : reporterRoleLabel}</p>
+              <div className="h-16 flex items-center justify-center">
+                {report.reporterSignature ? (
+                  <img
+                    src={report.reporterSignature}
+                    alt="Ttd Pembuat Laporan"
+                    className="max-h-14 max-w-[130px] object-contain"
+                  />
+                ) : report.status === 'selesai' ? (
+                  <span className="font-serif italic font-bold text-lg text-slate-900 tracking-wider">( Ttd )</span>
+                ) : null}
               </div>
+              <p className="font-bold text-slate-900 underline">{isKepalaSekolahReport ? (userProfile?.name || 'Cece Enjang Kartiwa, S.Pd.,MM') : report.reporterName}</p>
               <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
-                NIP. {userProfile?.nip || '19740512 200212 1 003'}
+                {isKepalaSekolahReport ? `NIP. ${userProfile?.nip || '19780706 200501 1 011'}` : (report.reporterNip ? `NIP. ${report.reporterNip}` : '')}
               </p>
             </div>
           </div>
@@ -411,7 +428,7 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
           <div className="pt-2 no-print">
             <form onSubmit={handleAddNoteSubmit} className="space-y-2">
               <label className="block text-xs font-semibold text-slate-700">
-                Tambah Catatan Progres / Tanggapan Baru
+                Tambah Catatan Progres / Tanggapan Baru (Opsional)
               </label>
               <div className="flex gap-2">
                 <input

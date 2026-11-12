@@ -125,6 +125,7 @@ export interface ReportItem {
   assignedTo?: string;
   attachments: AttachmentFile[];
   logs: ReportLog[];
+  reporterSignature?: string; // Tanda tangan digital pembuat laporan (PNG data URL / URL gambar)
 }
 
 export interface UserProfile {

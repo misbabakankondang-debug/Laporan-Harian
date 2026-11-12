@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 );
 
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reporter_signature TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS public.reports (
     attachment_url TEXT,
     attachments JSONB DEFAULT '[]'::jsonb,
     logs JSONB DEFAULT '[]'::jsonb,
+    reporter_signature TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );

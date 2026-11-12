@@ -24,6 +24,7 @@ import {
 } from '../types/report';
 import { formatFileSize, formatDateOnly } from '../utils/formatters';
 import { TabType } from './Sidebar';
+import { SignaturePadInput } from './SignaturePadInput';
 
 interface CreateReportViewProps {
   reports: ReportItem[];
@@ -55,6 +56,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   const [location, setLocation] = useState('');
   const [description, setDescription] = useState('');
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const [reporterSignature, setReporterSignature] = useState<string>('');
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
 
   // Penanggung Jawab otomatis terisi dari akun profil pengguna yang sedang login
@@ -191,6 +193,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         picRole: picRole.trim() || userProfile.role,
         picNip: picNip.trim() || userProfile.nip,
         attachments,
+        reporterSignature: reporterSignature || undefined,
       });
 
       // If we were editing a draft, remove the draft
@@ -226,6 +229,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
       picRole: picRole.trim() || userProfile.role,
       picNip: picNip.trim() || userProfile.nip,
       attachments,
+      reporterSignature: reporterSignature || undefined,
     });
 
     if (editingDraftId && onDeleteDraft && editingDraftId !== saved.id) {
@@ -243,6 +247,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     setLocation('');
     setDescription('');
     setAttachments([]);
+    setReporterSignature('');
     setEditingDraftId(null);
     setErrors({});
   };
@@ -255,6 +260,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     setLocation(draft.location || '');
     setDescription(draft.description);
     setAttachments(draft.attachments || []);
+    setReporterSignature(draft.reporterSignature || '');
     setEditingDraftId(draft.id);
     setShowDraftModal(false);
   };
@@ -637,6 +643,13 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
               </div>
             )}
           </div>
+
+          {/* Tanda Tangan Pembuat Laporan (Gambar atau Upload .PNG) */}
+          <SignaturePadInput
+            value={reporterSignature}
+            onChange={setReporterSignature}
+            reporterName={userProfile.name}
+          />
 
           {/* Tombol Aksi */}
           <div className="flex items-center justify-between pt-4 border-t border-slate-100 flex-wrap gap-3">

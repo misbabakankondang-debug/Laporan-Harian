@@ -26,7 +26,7 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
   // Penanggung Jawab / Laporan dari (Ditulis Manual)
   const [picName, setPicName] = useState(report.picName || report.reporterName || '');
   const [picRole, setPicRole] = useState(report.picRole || 'Kepala Sekolah');
-  const [picNip, setPicNip] = useState(report.picNip || report.reporterNip || '19740512 200212 1 003');
+  const [picNip, setPicNip] = useState(report.picNip || report.reporterNip || '19780706 200501 1 011');
 
   const [error, setError] = useState('');
 

@@ -71,24 +71,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Profile fields
   const [name, setName] = useState(userProfile.name);
-  const [nip, setNip] = useState(userProfile.nip || '19740512 200212 1 003');
+  const [nip, setNip] = useState(userProfile.nip || '19780706 200501 1 011');
   const [email, setEmail] = useState(userProfile.email);
   const [phone, setPhone] = useState(userProfile.phone);
   const [department, setDepartment] = useState(userProfile.department);
   const [role, setRole] = useState(userProfile.role);
 
   // System & Kop Surat Settings
-  const [ticketPrefix, setTicketPrefix] = useState(appSettings.ticketPrefix || 'Tanggal Input Laporan/Nomor Urut');
+  const [ticketPrefix, setTicketPrefix] = useState(appSettings.ticketPrefix || 'DDMMYYYY/Nomor Urut');
   const [helpDeskNumber, setHelpDeskNumber] = useState(appSettings.helpDeskNumber || '8800 / 8801');
   const [emailNotification, setEmailNotification] = useState(appSettings.emailNotification);
   const [whatsappNotification, setWhatsappNotification] = useState(appSettings.whatsappNotification);
   const [autoSaveDraft, setAutoSaveDraft] = useState(appSettings.autoSaveDraft);
   
   const [mainLogoUrl, setMainLogoUrl] = useState<string>(appSettings.mainLogoUrl || '');
-  const [kopLogoUrl, setKopLogoUrl] = useState<string>(appSettings.kopLogoUrl || '');
+  const [kopLogoUrl, setKopLogoUrl] = useState<string>(
+    appSettings.kopLogoUrl || 'https://vectorez.biz.id/wp-content/uploads/2024/05/Logo-Kementerian-Sosial-Kemensos-Republik-Indonesia@0.5x.png'
+  );
   const [backgroundHeroUrl, setBackgroundHeroUrl] = useState<string>(appSettings.backgroundHeroUrl || '');
   const [kopAddress, setKopAddress] = useState<string>(
-    appSettings.kopAddress || 'Jl. Raya Sumedang - Wado, Paseh, Kabupaten Sumedang, Jawa Barat 45311 | Pos-el: srt1sumedang@kemensos.go.id'
+    appSettings.kopAddress || 'Desa Kebon Cau, Kecamatan Ujung Jaya Kabupaten Sumedang Kode Pos 45383'
   );
 
   // Supabase Manual Configuration
@@ -298,7 +300,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     });
 
     onSaveSettings({
-      ticketPrefix: ticketPrefix.trim() || 'Tanggal Input Laporan/Nomor Urut',
+      ticketPrefix: ticketPrefix.trim() || 'DDMMYYYY/Nomor Urut',
       helpDeskNumber: helpDeskNumber.trim(),
       emailNotification,
       whatsappNotification,

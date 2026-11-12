@@ -411,7 +411,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
                       required
                       value={staffNip}
                       onChange={(e) => setStaffNip(e.target.value)}
-                      placeholder="Contoh: 19740512 200212 1 003"
+                      placeholder="Contoh: 19780706 200501 1 011"
                       className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-emerald-500 font-mono text-xs font-bold text-slate-800 bg-slate-50/50"
                     />
                   </div>

@@ -13,10 +13,11 @@ export function openPrintPdfTab(
     year: 'numeric',
   }).format(new Date());
 
-  const kopLogoSrc = appSettings?.kopLogoUrl || '';
-  const kopAddress = appSettings?.kopAddress || 'Jl. Raya Sumedang - Wado, Paseh, Kabupaten Sumedang, Jawa Barat 45311 | Pos-el: srt1sumedang@kemensos.go.id';
+  const defaultKopLogo = 'https://vectorez.biz.id/wp-content/uploads/2024/05/Logo-Kementerian-Sosial-Kemensos-Republik-Indonesia@0.5x.png';
+  const kopLogoSrc = appSettings?.kopLogoUrl || defaultKopLogo;
+  const kopAddress = appSettings?.kopAddress || 'Desa Kebon Cau, Kecamatan Ujung Jaya Kabupaten Sumedang Kode Pos 45383';
 
-  // SVG Kemensos Logo fallback if no custom kop logo
+  // SVG Kemensos Logo fallback if image fails
   const kemensosLogoSvg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="76" height="76" style="display:block;">
       <defs>
@@ -36,9 +37,7 @@ export function openPrintPdfTab(
     </svg>
   `;
 
-  const logoHtml = kopLogoSrc
-    ? `<img src="${kopLogoSrc}" alt="Logo Kemensos" style="max-height: 80px; max-width: 90px; object-fit: contain; display: block;" />`
-    : kemensosLogoSvg;
+  const logoHtml = `<img src="${kopLogoSrc}" alt="Logo Kementerian Sosial RI" style="max-height: 85px; max-width: 90px; object-fit: contain; display: block;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" /><div style="display:none;">${kemensosLogoSvg}</div>`;
 
   // Format attachments for images
   let attachmentsHtml = '';
@@ -68,13 +67,47 @@ export function openPrintPdfTab(
     `;
   }
 
-  const picName = report.picName || report.assignedTo || 'Tim Satgas / Guru';
-  const picRole = report.picRole || 'Petugas Satgas Penanganan';
-  const picNip = report.picNip ? `NIP. ${report.picNip}` : 'Sekolah Rakyat Terintegerasi 1 Sumedang';
+  const isKepalaSekolahReport = 
+    report.userRole === 'kepala_sekolah' ||
+    (report.picRole && report.picRole.toLowerCase().includes('kepala sekolah')) ||
+    (report.reporterName && report.reporterName.toLowerCase().includes('cece enjang')) ||
+    (report.reporterNip && report.reporterNip.replace(/\s+/g, '') === '197807062005011011');
 
-  const chiefName = userProfile?.name || 'Cece Enjang Kartiwa, S.Pd.,MM';
-  const chiefRole = userProfile?.role || 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang';
-  const chiefNip = userProfile?.nip ? `NIP. ${userProfile.nip}` : 'NIP. 19740512 200212 1 003';
+  const getRoleLabel = () => {
+    if (isKepalaSekolahReport) return 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang';
+    if (report.picRole && report.picRole.trim()) return report.picRole;
+    if (report.reporterDept && report.reporterDept.trim()) return report.reporterDept;
+    if (report.userRole === 'wali_asrama') return 'Wali Asrama';
+    if (report.userRole === 'wali_asuh') return 'Wali Asuh';
+    if (report.userRole === 'guru') return 'Guru';
+    if (report.userRole === 'tenaga_keamanan' || report.userRole === 'keamanan') return 'Tenaga Keamanan';
+    if (report.userRole === 'admin') return 'Administrator Sistem';
+    return 'Staf / Petugas';
+  };
+  const reporterRoleLabel = getRoleLabel();
+
+  const chiefName = (userProfile?.roleKey === 'kepala_sekolah' && userProfile?.name) 
+    ? userProfile.name 
+    : 'Cece Enjang Kartiwa, S.Pd.,MM';
+  const chiefRole = (userProfile?.roleKey === 'kepala_sekolah' && userProfile?.role) 
+    ? userProfile.role 
+    : 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang';
+  const chiefNip = (userProfile?.roleKey === 'kepala_sekolah' && userProfile?.nip) 
+    ? `NIP. ${userProfile.nip}` 
+    : 'NIP. 19780706 200501 1 011';
+
+  // Signature spaces
+  const reporterSignSpaceHtml = report.reporterSignature
+    ? `<div class="sign-space" style="height: 60px; display: flex; align-items: center; justify-content: center;"><img src="${report.reporterSignature}" alt="Ttd Pembuat Laporan" style="max-height: 55px; max-width: 140px; object-fit: contain; margin: 0 auto; display: block;" /></div>`
+    : (report.status === 'selesai'
+      ? `<div class="sign-space" style="height: 60px; display: flex; align-items: center; justify-content: center; font-style: italic; font-weight: bold; font-size: 13pt; color: #000000; letter-spacing: 1px;">( Ttd )</div>`
+      : `<div class="sign-space" style="height: 60px;"></div>`);
+
+  const chiefSignSpaceHtml = report.reporterSignature
+    ? `<div class="sign-space" style="height: 60px; display: flex; align-items: center; justify-content: center;"><img src="${report.reporterSignature}" alt="Ttd Kepala Sekolah" style="max-height: 55px; max-width: 140px; object-fit: contain; margin: 0 auto; display: block;" /></div>`
+    : (report.status === 'selesai'
+      ? `<div class="sign-space" style="height: 60px; display: flex; align-items: center; justify-content: center; font-style: italic; font-weight: bold; font-size: 13pt; color: #000000; letter-spacing: 1px;">( Ttd )</div>`
+      : `<div class="sign-space" style="height: 60px;"></div>`);
 
   const html = `<!DOCTYPE html>
 <html lang="id">
@@ -325,8 +358,13 @@ export function openPrintPdfTab(
     <!-- TUJUAN SURAT / KEPADA -->
     <div class="recipient-box">
       <div class="recipient-title">Kepada :</div>
-      <div class="recipient-name">Yth. Menteri Sosial Republik Indonesia</div>
-      <div>di Jakarta</div>
+      ${isKepalaSekolahReport ? `
+        <div class="recipient-name">Yth. Menteri Sosial Republik Indonesia</div>
+        <div>di Jakarta</div>
+      ` : `
+        <div class="recipient-name">Yth. Kepala Sekolah Rakyat Terintegerasi 1 Sumedang</div>
+        <div>di Sumedang</div>
+      `}
     </div>
 
     <!-- JUDUL LAPORAN & NOMOR -->
@@ -364,15 +402,8 @@ export function openPrintPdfTab(
       <tr>
         <td class="label">Pelapor</td>
         <td class="value">
-          <strong>${report.reporterName}</strong>
-          ${report.reporterDept ? `<div style="font-size: 8pt; color: #64748b;">${report.reporterDept}</div>` : ''}
-        </td>
-      </tr>
-      <tr>
-        <td class="label">Penanggung Jawab / Laporan Dari</td>
-        <td class="value">
-          <strong>${picName}</strong>
-          <div style="font-size: 8pt; color: #64748b;">${picRole} ${report.picNip ? `· NIP. ${report.picNip}` : ''}</div>
+          <div style="font-weight: bold; font-size: 10pt; color: #000000;">${report.reporterName}</div>
+          <div style="font-size: 8.5pt; color: #334155; margin-top: 2px;">${reporterRoleLabel}${report.reporterNip ? ` · NIP. ${report.reporterNip}` : ''}</div>
         </td>
       </tr>
     </table>
@@ -386,22 +417,14 @@ export function openPrintPdfTab(
     <!-- KOLOM BUKTI FOTO (JIKA ADA) -->
     ${attachmentsHtml}
 
-    <!-- LEMBAR PENGESAHAN TANDA TANGAN -->
-    <div class="signature-grid">
-      <div class="signature-col">
-        <div>Petugas Penanggung Jawab / Laporan Dari,</div>
-        <div style="font-size: 8.5pt; color: #475569;">${picRole}</div>
-        <div class="sign-space"></div>
-        <div class="sign-name">${picName}</div>
-        <div class="sign-nip">${picNip}</div>
-      </div>
-
-      <div class="signature-col">
+    <!-- LEMBAR PENGESAHAN TANDA TANGAN (SEBELAH KANAN) -->
+    <div class="signature-grid" style="display: flex; justify-content: flex-end;">
+      <div class="signature-col" style="width: 48%; margin-left: auto;">
         <div>Sumedang, ${printDate}</div>
-        <div style="font-size: 8.5pt; color: #475569;">${chiefRole}</div>
-        <div class="sign-space"></div>
-        <div class="sign-name">${chiefName}</div>
-        <div class="sign-nip">${chiefNip}</div>
+        <div style="font-size: 8.5pt; color: #475569; margin-top: 2px;">${isKepalaSekolahReport ? chiefRole : reporterRoleLabel}</div>
+        ${isKepalaSekolahReport ? chiefSignSpaceHtml : reporterSignSpaceHtml}
+        <div class="sign-name">${isKepalaSekolahReport ? chiefName : report.reporterName}</div>
+        <div class="sign-nip">${isKepalaSekolahReport ? chiefNip : (report.reporterNip ? `NIP. ${report.reporterNip}` : '')}</div>
       </div>
     </div>
 

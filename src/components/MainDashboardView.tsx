@@ -114,7 +114,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
       {/* ================= HERO HEADER LANDSCAPE: SEKOLAH RAKYAT & SIBAHAR ================= */}
       {/* Precision landscape container from edge to edge with custom uploaded photo support */}
       <div 
-        className="relative overflow-hidden rounded-2xl sm:rounded-3xl shadow-xl border border-emerald-600/30 text-white min-h-[220px] sm:min-h-[240px] flex flex-col justify-between"
+        className="relative overflow-hidden rounded-2xl sm:rounded-3xl shadow-xl border border-emerald-400/40 text-white min-h-[220px] sm:min-h-[240px] flex flex-col justify-between"
         style={
           appSettings.backgroundHeroUrl ? {
             backgroundImage: `url(${appSettings.backgroundHeroUrl})`,
@@ -122,15 +122,15 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
             backgroundPosition: 'center',
             backgroundRepeat: 'no-repeat',
           } : {
-            background: 'linear-gradient(135deg, #064e3b 0%, #047857 50%, #115e59 100%)',
+            background: 'linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%)',
           }
         }
       >
         {/* Layer Gradient Overlay agar teks selalu terbaca kontras & presisi */}
-        <div className={`absolute inset-0 ${appSettings.backgroundHeroUrl ? 'bg-gradient-to-r from-emerald-950/95 via-emerald-900/85 to-teal-950/80 backdrop-blur-[1px]' : 'bg-gradient-to-r from-emerald-900/90 via-emerald-800/80 to-teal-900/70'}`} />
+        <div className={`absolute inset-0 ${appSettings.backgroundHeroUrl ? 'bg-gradient-to-r from-emerald-950/90 via-emerald-900/80 to-teal-950/75 backdrop-blur-[1px]' : 'bg-gradient-to-r from-emerald-800/75 via-emerald-700/60 to-teal-600/50'}`} />
 
         {/* Decorative Kemensos Watermark */}
-        <div className="absolute right-6 bottom-0 opacity-15 pointer-events-none hidden md:block">
+        <div className="absolute right-6 bottom-0 opacity-20 pointer-events-none hidden md:block">
           <KemensosLogo className="w-56 h-56 text-white" />
         </div>
 
@@ -139,11 +139,11 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
           <div className="space-y-3 max-w-3xl">
             {/* Tag Lembaga Resmi & Badge Hak Akses */}
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/20 backdrop-blur-md rounded-full border border-white/25 text-xs text-emerald-100 font-semibold shadow-2xs">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/20 backdrop-blur-md rounded-full border border-white/25 text-xs text-white font-semibold shadow-2xs">
                 <Building2 className="w-3.5 h-3.5 text-amber-300" />
                 <span>Kementerian Sosial Republik Indonesia</span>
               </div>
-              <div className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-400/90 text-slate-900 font-bold rounded-full text-[11px] shadow-2xs">
+              <div className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-400 text-slate-900 font-bold rounded-full text-[11px] shadow-2xs">
                 <span>Role: {roleInfo.label}</span>
               </div>
             </div>
@@ -153,17 +153,24 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               Sekolah Rakyat Terintegerasi 1 Sumedang
             </h1>
 
-            {/* Kata SIBAHAR (Selector 4: color: #ffffff) & Akronim (Selector 3: font-style: italic) */}
-            <div className="pt-1 border-t border-emerald-500/50">
+            {/* Logo Utama di atas SIBAHAR & Kata SIBAHAR */}
+            <div className="pt-2 border-t border-emerald-400/40">
+              <div className="mb-2.5 flex items-center">
+                <img
+                  src={appSettings.mainLogoUrl || 'https://kitasiar.com/wp-content/uploads/2025/12/Logo-Sekolah-Rakyat.jpeg'}
+                  alt="Logo Sekolah Rakyat"
+                  className="h-16 w-16 sm:h-20 sm:w-20 object-contain rounded-2xl bg-white p-1.5 shadow-md border-2 border-white/80 shrink-0"
+                />
+              </div>
               <div className="flex items-baseline gap-2.5 flex-wrap">
                 <span className="text-3xl sm:text-4xl font-black tracking-wider text-[#ffffff] font-mono drop-shadow-md">
                   SIBAHAR
                 </span>
-                <span className="text-xs sm:text-sm font-medium text-emerald-100 tracking-wide italic">
+                <span className="text-xs sm:text-sm font-medium text-emerald-50 tracking-wide italic">
                   (Sistem Informasi Berita Aktual Harian)
                 </span>
               </div>
-              <p className="text-xs sm:text-sm text-emerald-100/90 mt-1.5 leading-relaxed max-w-2xl drop-shadow-xs">
+              <p className="text-xs sm:text-sm text-emerald-50 mt-1.5 leading-relaxed max-w-2xl drop-shadow-xs">
                 Platform terpadu pemantauan berita harian, pencatatan insiden siswa, asesmen kedisiplinan, serta pelaporan resmi terintegerasi ke Kementerian Sosial Republik Indonesia.
               </p>
             </div>

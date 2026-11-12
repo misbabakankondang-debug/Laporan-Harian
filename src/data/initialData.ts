@@ -3,7 +3,7 @@ import { ReportItem, UserProfile, AppSettings, NotificationItem, UserRole } from
 export const initialProfile: UserProfile = {
   id: 'usr-kepala-001',
   name: 'Cece Enjang Kartiwa, S.Pd.,MM',
-  nip: '19740512 200212 1 003',
+  nip: '19780706 200501 1 011',
   email: 'cece.enjang@kemensos.go.id',
   phone: '0812-2345-6789',
   department: 'Kementerian Sosial Republik Indonesia',
@@ -17,7 +17,7 @@ export const DEFAULT_ROLE_USERS: Record<UserRole, UserProfile & { defaultPasswor
   admin: {
     id: 'usr-admin-001',
     name: 'Igar Nurdiansah, S.Kom',
-    nip: '19880415 201201 1 005',
+    nip: '19940613 202622 1 001',
     email: 'admin@srt1sumedang.sch.id',
     phone: '0813-9876-5432',
     department: 'Subbag Tata Usaha & IT',
@@ -96,7 +96,7 @@ export const DEFAULT_ROLE_USERS: Record<UserRole, UserProfile & { defaultPasswor
   kepala_sekolah: {
     id: 'usr-kepala-001',
     name: 'Cece Enjang Kartiwa, S.Pd.,MM',
-    nip: '19740512 200212 1 003',
+    nip: '19780706 200501 1 011',
     email: 'kepala.sekolah@srt1sumedang.sch.id',
     phone: '0812-2345-6789',
     department: 'Kementerian Sosial Republik Indonesia',
@@ -119,11 +119,13 @@ export const CANONICAL_ROLE_USERS: (UserProfile & { defaultPassword: string })[]
 ];
 
 export const initialSettings: AppSettings = {
-  ticketPrefix: 'Tanggal Input Laporan/Nomor Urut',
+  ticketPrefix: 'DDMMYYYY/Nomor Urut',
   emailNotification: true,
   whatsappNotification: true,
   autoSaveDraft: true,
-  kopAddress: 'Jl. Raya Sumedang - Wado, Paseh, Kabupaten Sumedang, Jawa Barat 45311 | Pos-el: srt1sumedang@kemensos.go.id',
+  mainLogoUrl: 'https://kitasiar.com/wp-content/uploads/2025/12/Logo-Sekolah-Rakyat.jpeg',
+  kopLogoUrl: 'https://vectorez.biz.id/wp-content/uploads/2024/05/Logo-Kementerian-Sosial-Kemensos-Republik-Indonesia@0.5x.png',
+  kopAddress: 'Desa Kebon Cau, Kecamatan Ujung Jaya Kabupaten Sumedang Kode Pos 45383',
   helpDeskNumber: '8800 / 8801',
   backgroundHeroUrl: '',
 };

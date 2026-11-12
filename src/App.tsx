@@ -189,12 +189,12 @@ function SIBAHARAppContent() {
 
   // Handlers for creating reports
   const handleSubmitReport = (newReportData: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>): ReportItem => {
-    // Generate sequential ticket ID with format: Tanggal Input Laporan / Nomor Urut (e.g. 20261106/001)
+    // Generate sequential ticket ID with format: DDMMYYYY / Nomor Urut (e.g. 12112026/001)
     const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
     const d = String(now.getDate()).padStart(2, '0');
-    const dateStr = `${y}${m}${d}`;
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const y = now.getFullYear();
+    const dateStr = `${d}${m}${y}`;
 
     const nonDrafts = reports.filter((r) => r.id.startsWith(dateStr) && !r.id.includes('DRAFT'));
     const nextNum = nonDrafts.length + 1;
@@ -286,10 +286,10 @@ function SIBAHARAppContent() {
 
   const handleSaveDraft = (draftData: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>): ReportItem => {
     const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
     const d = String(now.getDate()).padStart(2, '0');
-    const dateStr = `${y}${m}${d}`;
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const y = now.getFullYear();
+    const dateStr = `${d}${m}${y}`;
 
     const draftCount = reports.filter((r) => r.id.startsWith(dateStr) && r.status === 'draft').length + 1;
     const draftId = `${dateStr}/DRAFT-${String(draftCount).padStart(3, '0')}`;
@@ -588,6 +588,74 @@ function SIBAHARAppContent() {
     );
   };
 
+  // Requirement 7: Sinkronisasi NIP atau data profil pengguna ke seluruh laporan & database Supabase
+  const handleSaveProfileWithReportsSync = (profileUpdates: Partial<UserProfile>) => {
+    updateCurrentUserProfile(profileUpdates);
+
+    const newName = profileUpdates.name?.trim();
+    const newNip = profileUpdates.nip?.trim();
+    const newDept = profileUpdates.department?.trim();
+    const newRole = profileUpdates.role?.trim();
+
+    setReports((prevReports) => {
+      let hasChanges = false;
+      const updatedReports = prevReports.map((r) => {
+        const isUserReport = 
+          (r.userId && r.userId === currentUser.id) ||
+          (r.reporterEmail && r.reporterEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+          (r.reporterName === currentUser.name) ||
+          Boolean(r.reporterNip && currentUser.nip && r.reporterNip === currentUser.nip);
+
+        if (isUserReport) {
+          hasChanges = true;
+          const updated: ReportItem = {
+            ...r,
+            reporterName: newName || r.reporterName,
+            reporterNip: newNip !== undefined ? newNip : r.reporterNip,
+            reporterDept: newDept || r.reporterDept,
+            picName: (r.picName === currentUser.name && newName) ? newName : r.picName,
+            picNip: (r.picNip === currentUser.nip && newNip !== undefined) ? newNip : r.picNip,
+            picRole: (newRole && r.picRole === currentUser.role) ? newRole : r.picRole,
+          };
+
+          // Simpan perubahan langsung ke database Supabase
+          const client = getSupabaseClient();
+          if (client) {
+            client
+              .from('reports')
+              .update({
+                reporter_name: updated.reporterName,
+                reporter_nip: updated.reporterNip,
+                reporter_dept: updated.reporterDept,
+                pic_name: updated.picName,
+                pic_nip: updated.picNip,
+                pic_role: updated.picRole,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', r.id)
+              .then(
+                ({ error }) => {
+                  if (error) console.warn('Supabase sync report on profile update warning:', error.message);
+                },
+                (err: any) => console.warn('Supabase sync report profile network warning:', err?.message || err)
+              );
+          }
+
+          return updated;
+        }
+        return r;
+      });
+
+      if (hasChanges) {
+        try {
+          localStorage.setItem('sibahar_items', JSON.stringify(updatedReports));
+        } catch {}
+      }
+
+      return updatedReports;
+    });
+  };
+
   const handleResetToDefault = () => {
     if (window.confirm('Apakah Anda yakin ingin mereset seluruh data kembali ke data contoh bawaan SIBAHAR?')) {
       setReports(initialReports);
@@ -643,7 +711,7 @@ function SIBAHARAppContent() {
   }
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans text-slate-800 antialiased overflow-hidden">
+    <div className="flex h-screen bg-gradient-to-br from-emerald-50/40 via-slate-50 to-teal-50/30 font-sans text-slate-800 antialiased overflow-hidden">
       {/* ================= SIDEBAR ================= */}
       <Sidebar
         currentTab={currentTab}
@@ -746,7 +814,7 @@ function SIBAHARAppContent() {
               userProfile={currentUser}
               appSettings={appSettings}
               reports={reports}
-              onSaveProfile={updateCurrentUserProfile}
+              onSaveProfile={handleSaveProfileWithReportsSync}
               onSaveSettings={setAppSettings}
               onResetToDefault={handleResetToDefault}
               onDeleteReportsByRange={handleDeleteReportsByRange}

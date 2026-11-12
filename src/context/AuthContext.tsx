@@ -14,9 +14,17 @@ const migrateUsersList = (users: UserProfile[]): UserProfile[] => {
     // 1. Admin: Ahmad Fauzi -> Igar Nurdiansah, S.Kom
     if (updated.roleKey === 'admin' || updated.name.includes('Ahmad Fauzi') || updated.email.includes('admin@srt1sumedang')) {
       updated.name = 'Igar Nurdiansah, S.Kom';
+      updated.nip = '19940613 202622 1 001';
       updated.avatarInitials = 'IN';
       updated.roleKey = 'admin';
     } 
+    // Kepala Sekolah
+    else if (updated.roleKey === 'kepala_sekolah' || updated.name.includes('Cece Enjang')) {
+      updated.name = 'Cece Enjang Kartiwa, S.Pd.,MM';
+      updated.nip = '19780706 200501 1 011';
+      updated.avatarInitials = 'CK';
+      updated.roleKey = 'kepala_sekolah';
+    }
     // 2. Wali Asrama: H. Dedi Mulyana -> Romi Apek Nugraha, S.Pd
     else if (updated.roleKey === 'wali_asrama' || updated.name.includes('Dedi Mulyana')) {
       updated.name = 'Romi Apek Nugraha, S.Pd';
@@ -95,9 +103,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.roleKey) {
-          // Migrasi nama jika di cache lokal masih menggunakan nama contoh lama
-          if (parsed.roleKey === 'admin' && (parsed.name?.includes('Ahmad Fauzi') || parsed.email?.includes('admin@srt1sumedang'))) {
-            return DEFAULT_ROLE_USERS.admin;
+          // Migrasi data jika di cache lokal masih menggunakan nama atau NIP contoh lama
+          if (parsed.roleKey === 'admin') {
+            if (parsed.name?.includes('Ahmad Fauzi') || parsed.email?.includes('admin@srt1sumedang') || parsed.nip?.includes('19880415')) {
+              return DEFAULT_ROLE_USERS.admin;
+            }
+          }
+          if (parsed.roleKey === 'kepala_sekolah') {
+            if (parsed.nip?.includes('19740512')) {
+              return DEFAULT_ROLE_USERS.kepala_sekolah;
+            }
           }
           if (parsed.roleKey === 'wali_asrama' && parsed.name?.includes('Dedi Mulyana')) {
             return DEFAULT_ROLE_USERS.wali_asrama;
@@ -646,6 +661,33 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           },
           (err: any) => console.warn('Supabase updateUserByAdmin network warning:', err?.message || err)
         );
+
+      // Sinkronisasi pembaruan NIP & nama ke seluruh laporan milik pengguna ini
+      if (updates.name || updates.nip !== undefined || updates.department !== undefined) {
+        const repPayload: any = { updated_at: new Date().toISOString() };
+        if (updates.name) {
+          repPayload.reporter_name = updates.name.trim();
+          repPayload.pic_name = updates.name.trim();
+        }
+        if (updates.nip !== undefined) {
+          repPayload.reporter_nip = updates.nip.trim();
+          repPayload.pic_nip = updates.nip.trim();
+        }
+        if (updates.department) {
+          repPayload.reporter_dept = updates.department.trim();
+        }
+
+        client
+          .from('reports')
+          .update(repPayload)
+          .match({ reporter_email: targetEmail })
+          .then(
+            ({ error }) => {
+              if (error) console.warn('Supabase sync reports on admin user edit warning:', error.message);
+            },
+            (err: any) => console.warn('Supabase sync reports on admin user edit network warning:', err?.message || err)
+          );
+      }
     }
   };
 

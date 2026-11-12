@@ -294,6 +294,7 @@ export const mapDbReportToReportItem = (row: any): ReportItem => {
     assignedTo: row.assigned_to,
     attachments: Array.isArray(row.attachments) ? row.attachments : [],
     logs: Array.isArray(row.logs) ? row.logs : [],
+    reporterSignature: row.reporter_signature || '',
   };
 };
 
@@ -320,6 +321,7 @@ export const mapReportItemToDbRow = (item: ReportItem, userId: string, userRole:
     assigned_to: item.assignedTo || '',
     attachments: item.attachments || [],
     logs: item.logs || [],
+    reporter_signature: item.reporterSignature || null,
     updated_at: new Date().toISOString(),
   };
 };

@@ -108,26 +108,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Container with Green & White Collaboration */}
       <aside 
-        className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-emerald-950 text-white flex flex-col justify-between shrink-0 transform transition-transform duration-200 ease-in-out md:translate-x-0 border-r border-emerald-900/80 shadow-lg ${
+        className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-gradient-to-b from-emerald-50 via-teal-50/70 to-emerald-100 text-slate-800 flex flex-col justify-between shrink-0 transform transition-transform duration-200 ease-in-out md:translate-x-0 border-r border-emerald-200/90 shadow-md ${
           isOpenMobile ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         <div>
           {/* Brand / Logo */}
-          <div className="h-20 flex items-center justify-between px-5 border-b border-emerald-900/70 bg-emerald-900/40">
+          <div className="h-20 flex items-center justify-between px-5 border-b border-emerald-200/80 bg-white/80 backdrop-blur-xs">
             <div className="flex items-center gap-3">
               {mainLogoUrl ? (
-                <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center shrink-0 border border-emerald-700 shadow-sm overflow-hidden">
+                <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center shrink-0 border border-emerald-300 shadow-sm overflow-hidden">
                   <img src={mainLogoUrl} alt="Logo SIBAHAR" className="w-full h-full object-contain" />
                 </div>
               ) : (
-                <div className="bg-emerald-600 p-2.5 rounded-xl text-white shadow-sm shrink-0 border border-emerald-500/50">
+                <div className="bg-emerald-600 p-2.5 rounded-xl text-white shadow-sm shrink-0 border border-emerald-500">
                   <FileText className="w-5 h-5" />
                 </div>
               )}
               <div className="min-w-0">
-                <span className="font-bold text-lg tracking-tight text-white block">SIBAHAR</span>
-                <span className="text-[9px] text-emerald-300 font-medium block -mt-0.5 tracking-wide leading-tight line-clamp-2">
+                <span className="font-extrabold text-lg tracking-tight text-emerald-950 block">SIBAHAR</span>
+                <span className="text-[9px] text-emerald-700 font-semibold block -mt-0.5 tracking-wide leading-tight line-clamp-2">
                   Sistem Informasi Berita Aktual Harian
                 </span>
               </div>
@@ -135,7 +135,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* Close button for mobile */}
             <button 
               onClick={onCloseMobile}
-              className="md:hidden text-emerald-300 hover:text-white p-1"
+              className="md:hidden text-emerald-700 hover:text-emerald-950 p-1 rounded-lg hover:bg-emerald-200/50"
               aria-label="Tutup menu"
             >
               <X className="w-5 h-5" />
@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Navigation Menu */}
           <div className="p-3.5 space-y-4">
             <div>
-              <p className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider mb-2.5 px-3">
+              <p className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider mb-2.5 px-3">
                 Menu Utama
               </p>
               <nav className="space-y-1">
@@ -158,20 +158,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onClick={() => handleNavClick(item.id)}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition text-left cursor-pointer ${
                         isActive
-                          ? 'bg-emerald-600 text-white shadow-md font-semibold ring-1 ring-emerald-400/40'
-                          : 'text-emerald-200/80 hover:text-white hover:bg-emerald-900/60'
+                          ? 'bg-emerald-600 text-white shadow-md font-semibold ring-1 ring-emerald-500'
+                          : 'text-emerald-900 hover:text-emerald-950 hover:bg-emerald-200/70 font-medium'
                       }`}
                     >
-                      <Icon className={`w-4 h-4 sm:w-4.5 sm:h-4.5 shrink-0 ${isActive ? 'text-white' : 'text-emerald-400'}`} />
+                      <Icon className={`w-4 h-4 sm:w-4.5 sm:h-4.5 shrink-0 ${isActive ? 'text-white' : 'text-emerald-700'}`} />
                       <span className="truncate">
-                        {item.numberPrefix && <span className="text-emerald-300/80 mr-1.5 font-mono text-xs">{item.numberPrefix}</span>}
+                        {item.numberPrefix && <span className={`${isActive ? 'text-emerald-100' : 'text-emerald-700'} mr-1.5 font-mono text-xs font-semibold`}>{item.numberPrefix}</span>}
                         {item.label}
                       </span>
                       {typeof item.badgeCount === 'number' && item.badgeCount > 0 && (
-                        <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-mono tabular-nums ${
+                        <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-mono tabular-nums font-semibold ${
                           isActive 
-                            ? 'bg-emerald-800 text-emerald-100 border border-emerald-500' 
-                            : 'bg-emerald-900 text-emerald-300 border border-emerald-700'
+                            ? 'bg-emerald-800 text-white border border-emerald-500' 
+                            : 'bg-emerald-200 text-emerald-900 border border-emerald-300'
                         }`}>
                           {item.badgeCount}
                         </span>
@@ -183,17 +183,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             {/* Quick Helper Box (Dynamic Help Desk) */}
-            <div className="mx-0.5 p-3 rounded-xl bg-emerald-900/50 border border-emerald-800/80 text-xs text-emerald-100 shadow-xs">
+            <div className="mx-0.5 p-3 rounded-xl bg-white/80 border border-emerald-200/90 text-xs text-slate-800 shadow-2xs">
               <div className="flex items-center gap-2 mb-1.5">
-                <PhoneCall className="w-3.5 h-3.5 text-emerald-400" />
-                <p className="font-semibold text-white text-xs">Pusat Bantuan Cepat</p>
+                <PhoneCall className="w-3.5 h-3.5 text-emerald-700" />
+                <p className="font-bold text-emerald-950 text-xs">Pusat Bantuan Cepat</p>
               </div>
-              <p className="text-emerald-300/90 text-[11px] leading-relaxed mb-2">
+              <p className="text-emerald-800/90 text-[11px] leading-relaxed mb-2">
                 Kendala sarpras, keamanan, atau darurat kesehatan? Hubungi meja piket.
               </p>
-              <div className="text-[11px] font-mono tabular-nums text-emerald-200 flex items-center justify-between pt-1.5 border-t border-emerald-800/80">
-                <span className="text-emerald-400 font-sans text-[10.5px]">Ext. Help Desk:</span>
-                <span className="font-bold text-white bg-emerald-800/80 px-2 py-0.5 rounded border border-emerald-700">
+              <div className="text-[11px] font-mono tabular-nums text-slate-700 flex items-center justify-between pt-1.5 border-t border-emerald-200">
+                <span className="text-emerald-800 font-sans text-[10.5px] font-medium">Ext. Help Desk:</span>
+                <span className="font-bold text-emerald-950 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300">
                   {helpDeskNumber}
                 </span>
               </div>
@@ -202,14 +202,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* User Profile Card & Role Switcher */}
-        <div className="p-3 m-2.5 rounded-xl bg-emerald-900/60 border border-emerald-800/80 space-y-2">
+        <div className="p-3 m-2.5 rounded-xl bg-white/85 border border-emerald-200/90 space-y-2 shadow-2xs">
           {/* User Info */}
           <div 
             onClick={() => handleNavClick('settings')}
             className="flex items-center gap-3 cursor-pointer hover:opacity-90 transition"
             title="Buka Pengaturan Profil"
           >
-            <div className="w-9 h-9 rounded-full bg-white text-emerald-900 flex items-center justify-center font-bold text-xs shrink-0 shadow-xs border border-emerald-200 overflow-hidden">
+            <div className="w-9 h-9 rounded-full bg-emerald-700 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs border border-emerald-300 overflow-hidden">
               {userProfile.avatarUrl ? (
                 <img src={userProfile.avatarUrl} alt={userProfile.name} className="w-full h-full object-cover" />
               ) : (
@@ -217,9 +217,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
             <div className="overflow-hidden min-w-0 flex-1">
-              <p className="text-xs font-semibold truncate text-white" title={userProfile.name}>{userProfile.name}</p>
+              <p className="text-xs font-bold truncate text-slate-900" title={userProfile.name}>{userProfile.name}</p>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[10px] bg-amber-400/90 text-slate-900 font-bold px-1.5 py-0.2 rounded truncate">
+                <span className="text-[10px] bg-emerald-100 text-emerald-900 font-semibold px-1.5 py-0.2 rounded border border-emerald-200 truncate">
                   {currentRoleInfo.label}
                 </span>
               </div>
@@ -227,19 +227,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           {/* Role Switcher Button */}
-          <div className="pt-2 border-t border-emerald-800/80 flex items-center justify-between gap-1.5">
+          <div className="pt-2 border-t border-emerald-200 flex items-center justify-between gap-1.5">
             <button
               onClick={() => setShowRoleModal(true)}
-              className="flex-1 text-[11px] font-medium text-emerald-200 hover:text-white bg-emerald-800/70 hover:bg-emerald-800 px-2 py-1.5 rounded-lg border border-emerald-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 text-[11px] font-semibold text-emerald-900 hover:text-emerald-950 bg-emerald-100/90 hover:bg-emerald-200 px-2 py-1.5 rounded-lg border border-emerald-300 transition flex items-center justify-center gap-1.5 cursor-pointer"
               title="Ganti Jenis Akun (6 Role)"
             >
-              <UserCheck className="w-3.5 h-3.5 text-amber-300" />
+              <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
               <span>Ganti Role</span>
-              <ChevronDown className="w-3 h-3 text-emerald-300" />
+              <ChevronDown className="w-3 h-3 text-emerald-700" />
             </button>
             <button
               onClick={handleLogout}
-              className="p-1.5 text-emerald-300 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg border border-emerald-800 transition cursor-pointer"
+              className="p-1.5 text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition cursor-pointer"
               title="Keluar / Logout"
             >
               <LogOut className="w-3.5 h-3.5" />
