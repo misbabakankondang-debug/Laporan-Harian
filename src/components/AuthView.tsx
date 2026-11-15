@@ -38,6 +38,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
     registerWithEmail, 
     isLoading, 
     isSupabaseConnected, 
+    supabaseStatus,
     allUsersList 
   } = useAuth();
   
@@ -268,10 +269,16 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
               )}
             </div>
 
-            <div className="mt-2.5 flex items-center gap-2 text-[10.5px] text-emerald-200 bg-black/25 px-3 py-1 rounded-full border border-white/10">
-              <Database className="w-3.5 h-3.5 text-emerald-300" />
-              <span>
-                {isSupabaseConnected ? 'Database Supabase PostgreSQL Terhubung' : 'Mode Offline / Siap Supabase Connection'}
+            <div className={`mt-2.5 flex items-center gap-2 text-[10.5px] px-3 py-1 rounded-full border ${
+              isSupabaseConnected
+                ? 'text-emerald-200 bg-black/25 border-white/10'
+                : 'text-rose-200 bg-rose-950/60 border-rose-400/30'
+            }`}>
+              <Database className={`w-3.5 h-3.5 shrink-0 ${isSupabaseConnected ? 'text-emerald-300' : 'text-rose-300'}`} />
+              <span className="truncate max-w-xs sm:max-w-md" title={supabaseStatus.message}>
+                {isSupabaseConnected
+                  ? 'Terhubung ke Supabase'
+                  : `Belum Terhubung — ${supabaseStatus.message}`}
               </span>
             </div>
           </div>

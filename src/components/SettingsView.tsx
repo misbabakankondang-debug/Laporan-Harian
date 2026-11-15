@@ -32,8 +32,16 @@ import {
 import { UserProfile, AppSettings, ReportItem, UserRole, USER_ROLES } from '../types/report';
 import { KemensosLogo } from './KemensosLogo';
 import { useAuth } from '../context/AuthContext';
-import { isValidSupabaseUrl, isValidSupabaseKey, cleanCredentialString } from '../lib/supabase';
-import { supabase } from '../lib/supabase';
+import {
+  EXPECTED_SUPABASE_URL,
+  isValidSupabaseUrl,
+  isValidSupabaseKey,
+  cleanCredentialString,
+  getSupabaseConfig,
+  getSupabaseClient,
+  getEnvSupabaseUrl,
+  getEnvSupabaseKey,
+} from '../lib/supabase';
 import { FULL_SUPABASE_SCHEMA_SQL } from '../data/supabaseSchema';
 
 interface SettingsViewProps {
@@ -95,12 +103,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     appSettings.kopAddress || 'Desa Kebon Cau, Kecamatan Ujung Jaya Kabupaten Sumedang Kode Pos 45383'
   );
 
-  // Supabase Manual Configuration
+  // Supabase Configuration (Prioritas Utama: Environment Variables Vercel)
+  const initialSupabaseConfig = useMemo(() => getSupabaseConfig(), []);
+  const hasActiveEnvConfig = initialSupabaseConfig.source === 'env';
   const [supabaseUrlInput, setSupabaseUrlInput] = useState(() => {
-    return localStorage.getItem('sibahar_supabase_url') || import.meta.env.VITE_SUPABASE_URL || '';
+    return getEnvSupabaseUrl() || initialSupabaseConfig.url || '';
   });
   const [supabaseKeyInput, setSupabaseKeyInput] = useState(() => {
-    return localStorage.getItem('sibahar_supabase_key') || import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+    return getEnvSupabaseKey() || initialSupabaseConfig.key || '';
   });
 
   // Date range delete states
@@ -312,14 +322,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       kopLogoUrl,
       kopAddress: kopAddress.trim(),
       backgroundHeroUrl,
-      supabaseUrl: supabaseUrlInput.trim(),
-      supabaseAnonKey: supabaseKeyInput.trim(),
+      supabaseUrl: isValidSupabaseUrl(getEnvSupabaseUrl()) ? getEnvSupabaseUrl() : supabaseUrlInput.trim(),
+      supabaseAnonKey: '',
     });
 
     const trimmedUrl = cleanCredentialString(supabaseUrlInput);
     const trimmedKey = cleanCredentialString(supabaseKeyInput);
+    const envUrl = getEnvSupabaseUrl();
+    const envKey = getEnvSupabaseKey();
 
-    if (isValidSupabaseUrl(trimmedUrl) && isValidSupabaseKey(trimmedKey)) {
+    if (isValidSupabaseUrl(envUrl) && isValidSupabaseKey(envKey)) {
+      // Environment Variables Vercel aktif: pastikan tidak tertimpa nilai localStorage lama
+      localStorage.removeItem('sibahar_supabase_url');
+      localStorage.removeItem('sibahar_supabase_key');
+      checkSupabaseConnection();
+    } else if (isValidSupabaseUrl(trimmedUrl) && isValidSupabaseKey(trimmedKey)) {
       localStorage.setItem('sibahar_supabase_url', trimmedUrl);
       localStorage.setItem('sibahar_supabase_key', trimmedKey);
       checkSupabaseConnection(trimmedUrl, trimmedKey);
@@ -413,32 +430,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let rpcTargetId = uuidRegex.test(targetDeleteId) ? targetDeleteId : '';
 
-      if (!rpcTargetId && deletingUser.email) {
-        try {
-          const { data: profileRow } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('email', deletingUser.email.toLowerCase())
-            .maybeSingle();
-          if (profileRow?.id) {
-            rpcTargetId = profileRow.id;
-          }
-        } catch {}
-      }
-
-      // Memanggil fungsi RPC Supabase di sisi server database (menghapus public.profiles & auth.users)
-      try {
-        const { data: rpcData, error } = await supabase.rpc('delete_user_profile', {
-          target_id: rpcTargetId || deletingUser.email || targetDeleteId,
-        });
-
-        if (error && error.code !== 'NOT_CONFIGURED') {
-          console.warn('Supabase RPC delete_user_profile warning:', error.message);
-        } else if (rpcData && (rpcData as any).success === false) {
-          console.warn('Supabase RPC delete_user_profile:', (rpcData as any).error);
+      const client = getSupabaseClient();
+      if (client) {
+        if (!rpcTargetId && deletingUser.email) {
+          try {
+            const { data: profileRow } = await client
+              .from('profiles')
+              .select('id')
+              .eq('email', deletingUser.email.toLowerCase())
+              .maybeSingle();
+            if (profileRow?.id) {
+              rpcTargetId = profileRow.id;
+            }
+          } catch {}
         }
-      } catch (rpcErr: any) {
-        console.warn('Gagal memanggil RPC delete_user_profile:', rpcErr);
+
+        // Memanggil fungsi RPC Supabase di sisi server database (menghapus public.profiles & auth.users)
+        try {
+          const { data: rpcData, error } = await client.rpc('delete_user_profile', {
+            target_id: rpcTargetId || deletingUser.email || targetDeleteId,
+          });
+
+          if (error) {
+            console.warn('Supabase RPC delete_user_profile warning:', error.message);
+          } else if (rpcData && (rpcData as any).success === false) {
+            console.warn('Supabase RPC delete_user_profile:', (rpcData as any).error);
+          }
+        } catch (rpcErr: any) {
+          console.warn('Gagal memanggil RPC delete_user_profile:', rpcErr);
+        }
       }
 
       // Hapus dari state lokal & sinkron tabel profiles Supabase
@@ -480,10 +500,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         <div className="flex items-center gap-2">
           <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
-            isSupabaseConnected ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-amber-100 text-amber-800 border border-amber-300'
+            isSupabaseConnected ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800 border border-rose-300'
           }`}>
             <Database className="w-3.5 h-3.5" />
-            <span>{isSupabaseConnected ? 'Supabase Terhubung' : 'Supabase Standby'}</span>
+            <span>{isSupabaseConnected ? 'Terhubung ke Supabase' : 'Belum Terhubung'}</span>
           </span>
         </div>
       </div>
@@ -1016,14 +1036,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             {/* Feedback Status Box */}
             {(() => {
               const currentStat = testFeedback || supabaseStatus;
+              const sourceLabel =
+                currentStat.source === 'env'
+                  ? 'Environment Variables (Vercel / Vite)'
+                  : currentStat.source === 'localStorage'
+                  ? 'Penyimpanan Browser (Fallback Lokal)'
+                  : currentStat.source === 'mixed'
+                  ? 'Kombinasi Environment Variables & Browser'
+                  : 'Belum Terkonfigurasi';
+
               if (currentStat.state === 'connected') {
                 return (
                   <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-2.5">
                     <Check className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
                     <div>
-                      <p className="font-bold">Supabase Terhubung Sempurna!</p>
+                      <p className="font-bold">Terhubung ke Supabase</p>
                       <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
-                        Kredensial valid, server terhubung, dan tabel database siap digunakan untuk sinkronisasi laporan otomatis.
+                        {currentStat.message}
+                      </p>
+                      <p className="text-[10.5px] text-emerald-700 mt-1 font-medium">
+                        Sumber Kredensial: {sourceLabel}
                       </p>
                     </div>
                   </div>
@@ -1035,12 +1067,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-950 flex items-start gap-2.5">
                     <div className="w-4 h-4 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-bold mt-0.5 shrink-0">!</div>
                     <div className="space-y-1">
-                      <p className="font-bold">Kredensial Valid &amp; Server Supabase Terhubung!</p>
+                      <p className="font-bold">Belum Terhubung — Skema Database Belum Siap</p>
                       <p className="text-[11px] text-amber-900 leading-relaxed">
-                        Namun tabel database (<code className="font-mono bg-white px-1 py-0.2 rounded border border-amber-200">profiles</code> &amp; <code className="font-mono bg-white px-1 py-0.2 rounded border border-amber-200">reports</code>) belum dibuat di Supabase Anda.
+                        {currentStat.message}
                       </p>
                       <p className="text-[11px] text-amber-800 font-medium">
-                        👉 Klik tombol <strong>"Salin SQL Schema"</strong> di bawah, buka menu <strong>SQL Editor</strong> di dashboard Supabase Anda, tempel kodenya dan klik <strong>Run</strong>.
+                        Klik tombol <strong>"Salin SQL Schema"</strong> di bawah, buka menu <strong>SQL Editor</strong> di dashboard Supabase Anda, tempel kodenya dan klik <strong>Run</strong>.
                       </p>
                     </div>
                   </div>
@@ -1052,12 +1084,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-950 flex items-start gap-2.5">
                     <div className="w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] font-bold mt-0.5 shrink-0">×</div>
                     <div>
-                      <p className="font-bold">Koneksi Supabase Gagal</p>
+                      <p className="font-bold">Belum Terhubung ke Supabase</p>
                       <p className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
-                        {currentStat.message}
+                        Alasan: {currentStat.message}
                       </p>
                       <p className="text-[10.5px] text-rose-700 mt-1">
-                        Periksa kembali <strong>Project URL</strong> dan <strong>Anon Key</strong> di menu <em>Project Settings &gt; API</em> pada dashboard Supabase.
+                        Pastikan Project URL adalah <code className="font-mono bg-white px-1 rounded border border-rose-200">{EXPECTED_SUPABASE_URL}</code> dan periksa Anon/Publishable Key pada <em>Project Settings &gt; API</em> atau Environment Variables Vercel.
                       </p>
                     </div>
                   </div>
@@ -1065,17 +1097,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               }
 
               return (
-                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 flex items-start gap-2.5">
-                  <Database className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
+                <div className="p-3.5 rounded-xl bg-rose-50/70 border border-rose-200 text-xs text-rose-950 flex items-start gap-2.5">
+                  <Database className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
                   <div>
-                    <p className="font-semibold text-slate-900">Mode Penyimpanan Standby (Siap Supabase)</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-                      SIBAHAR beroperasi menggunakan penyimpanan browser terproteksi. Masukkan kredensial Supabase di bawah jika Anda ingin mengaktifkan sinkronisasi cloud terpusat.
+                    <p className="font-bold">Belum Terhubung ke Supabase</p>
+                    <p className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
+                      Alasan: {currentStat.message}
+                    </p>
+                    <p className="text-[10.5px] text-slate-600 mt-1">
+                      Data laporan lokal di browser tetap aman. Atur <code className="font-mono">VITE_SUPABASE_URL</code> dan <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> / <code className="font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code> di Vercel Environment Variables (atau isi formulir di bawah untuk pengujian lokal).
                     </p>
                   </div>
                 </div>
               );
             })()}
+
+            {hasActiveEnvConfig && (
+              <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 text-[11px] text-emerald-900">
+                <strong>Environment Variables Vercel Aktif:</strong> Kredensial dari <code className="font-mono">VITE_SUPABASE_URL</code> dan API Key Vercel menjadi sumber konfigurasi utama aplikasi secara otomatis.
+              </div>
+            )}
 
             <div className="space-y-3 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1090,17 +1131,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setSupabaseUrlInput(e.target.value);
                       setTestFeedback(null);
                     }}
-                    placeholder="https://xyzcompany.supabase.co"
+                    placeholder={EXPECTED_SUPABASE_URL}
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-emerald-500 font-mono text-xs bg-white"
                   />
                   <span className="text-[10px] text-slate-400 mt-0.5 block">
-                    Salin dari Supabase &gt; Project Settings &gt; API &gt; Project URL
+                    Project URL resmi: {EXPECTED_SUPABASE_URL}
                   </span>
                 </div>
 
                 <div>
                   <label className="block text-slate-700 font-medium mb-1 font-mono">
-                    VITE_SUPABASE_ANON_KEY
+                    VITE_SUPABASE_ANON_KEY / PUBLISHABLE_KEY
                   </label>
                   <input
                     type="password"
@@ -1109,11 +1150,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setSupabaseKeyInput(e.target.value);
                       setTestFeedback(null);
                     }}
-                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    placeholder="eyJhbGciOiJIUzI1NiIs... atau sb_publishable_..."
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-emerald-500 font-mono text-xs bg-white"
                   />
                   <span className="text-[10px] text-slate-400 mt-0.5 block">
-                    Salin dari Supabase &gt; Project Settings &gt; API &gt; anon key
+                    Salin dari Supabase &gt; Project Settings &gt; API (anon / publishable key)
                   </span>
                 </div>
               </div>

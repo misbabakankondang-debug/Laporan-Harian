@@ -177,7 +177,11 @@ function SIBAHARAppContent() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('Koneksi Supabase Realtime bermasalah:', status, err?.message || '');
+        }
+      });
 
     return () => {
       isMounted = false;

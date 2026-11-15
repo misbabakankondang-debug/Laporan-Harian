@@ -1,11 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { ReportItem, UserProfile, UserRole } from '../types/report';
+import { ReportItem, UserRole } from '../types/report';
 
-const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const envAnonKey = 
-  import.meta.env.VITE_SUPABASE_ANON_KEY || 
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || 
-  '';
+export const EXPECTED_SUPABASE_PROJECT_REF = 'ghpxnwlqpgbglpjgxeus';
+export const EXPECTED_SUPABASE_URL = `https://${EXPECTED_SUPABASE_PROJECT_REF}.supabase.co`;
+
+const STORAGE_URL_KEY = 'sibahar_supabase_url';
+const STORAGE_ANON_KEY = 'sibahar_supabase_key';
+const SINGLETON_AUTH_STORAGE_KEY = 'sibahar-supabase-auth';
 
 // Membersihkan string kredensial dari spasi dan tanda kutip yang tidak disengaja
 export const cleanCredentialString = (val: string | null | undefined): string => {
@@ -13,88 +14,236 @@ export const cleanCredentialString = (val: string | null | undefined): string =>
   return val.trim().replace(/^["']|["']$/g, '').trim();
 };
 
-// Validasi format URL Supabase agar tidak memicu error "Provided URL is malformed"
-export const isValidSupabaseUrl = (urlString: string | null | undefined): boolean => {
+export const normalizeSupabaseUrl = (urlString: string | null | undefined): string => {
   const cleaned = cleanCredentialString(urlString);
-  if (!cleaned) return false;
-  if (!cleaned.startsWith('https://') && !cleaned.startsWith('http://')) return false;
-  
-  // Jangan proses template placeholder yang masih mengandung kurung siku atau nama contoh
+  if (!cleaned) return '';
+  return cleaned.replace(/\/+$/, '');
+};
+
+export const getEnvSupabaseUrl = (): string => {
+  return normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
+};
+
+export const getEnvSupabaseKey = (): string => {
+  return cleanCredentialString(
+    import.meta.env.VITE_SUPABASE_ANON_KEY ||
+      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+      ''
+  );
+};
+
+export interface UrlValidationResult {
+  valid: boolean;
+  normalizedUrl: string;
+  error?: string;
+}
+
+// Validasi format URL Supabase, hostname, dan Project Reference resmi SIBAHAR
+export const validateSupabaseUrlDetail = (urlString: string | null | undefined): UrlValidationResult => {
+  const normalized = normalizeSupabaseUrl(urlString);
+  if (!normalized) {
+    return { valid: false, normalizedUrl: '', error: 'URL Supabase belum diisi.' };
+  }
+
   if (
-    cleaned.includes('<') || 
-    cleaned.includes('>') || 
-    cleaned.includes('[') || 
-    cleaned.includes(']') ||
-    cleaned.includes('your-project') ||
-    cleaned.includes('example.com')
+    normalized.includes('<') ||
+    normalized.includes('>') ||
+    normalized.includes('[') ||
+    normalized.includes(']') ||
+    normalized.includes('your-project') ||
+    normalized.includes('example.com') ||
+    normalized.includes('xyzcompany')
   ) {
-    return false;
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      error: `URL Supabase masih berupa teks contoh. Gunakan ${EXPECTED_SUPABASE_URL}`,
+    };
+  }
+
+  if (!normalized.startsWith('https://')) {
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      error: `Format URL Supabase tidak valid (wajib diawali https://). Gunakan ${EXPECTED_SUPABASE_URL}`,
+    };
   }
 
   try {
-    const urlObj = new URL(cleaned.endsWith('/') ? cleaned : `${cleaned}/`);
-    return Boolean(urlObj.hostname && urlObj.hostname.includes('.'));
+    const urlObj = new URL(normalized);
+    const hostname = urlObj.hostname.toLowerCase();
+
+    if (!hostname.endsWith('.supabase.co')) {
+      return {
+        valid: false,
+        normalizedUrl: normalized,
+        error: `Hostname URL tidak valid (${hostname}). Harus berakhiran .supabase.co (${EXPECTED_SUPABASE_URL}).`,
+      };
+    }
+
+    const expectedHost = `${EXPECTED_SUPABASE_PROJECT_REF}.supabase.co`;
+    if (hostname !== expectedHost) {
+      return {
+        valid: false,
+        normalizedUrl: normalized,
+        error: `Project Reference URL tidak sesuai (${hostname}). Aplikasi SIBAHAR harus terhubung ke ${EXPECTED_SUPABASE_URL}.`,
+      };
+    }
+
+    return {
+      valid: true,
+      normalizedUrl: `https://${expectedHost}`,
+    };
   } catch {
-    return false;
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      error: `Format URL Supabase rusak/malformed. Gunakan ${EXPECTED_SUPABASE_URL}.`,
+    };
   }
 };
 
-// Validasi Anon Key Supabase
-export const isValidSupabaseKey = (keyString: string | null | undefined): boolean => {
+export const isValidSupabaseUrl = (urlString: string | null | undefined): boolean => {
+  return validateSupabaseUrlDetail(urlString).valid;
+};
+
+export interface KeyValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
+// Validasi Anon Key / Publishable Key (dan cegah pemakaian Service Role Key di browser)
+export const validateSupabaseKeyDetail = (keyString: string | null | undefined): KeyValidationResult => {
   const cleaned = cleanCredentialString(keyString);
-  if (!cleaned) return false;
+  if (!cleaned) {
+    return { valid: false, error: 'Anon Key / Publishable Key Supabase belum diisi.' };
+  }
+
   if (
-    cleaned.includes('<') || 
-    cleaned.includes('>') || 
-    cleaned.includes('[') || 
+    cleaned.includes('<') ||
+    cleaned.includes('>') ||
+    cleaned.includes('[') ||
     cleaned.includes(']') ||
     cleaned.includes('your-anon-key') ||
+    cleaned.includes('your-anon-publishable-key') ||
     cleaned.length < 25
   ) {
-    return false;
+    return {
+      valid: false,
+      error: 'Format Anon / Publishable Key Supabase tidak valid atau masih berupa placeholder.',
+    };
   }
-  return true;
+
+  // Blokir secret key / service_role key di frontend
+  if (cleaned.startsWith('sb_secret_')) {
+    return {
+      valid: false,
+      error: 'Dilarang menggunakan Secret / Service Role Key di frontend. Gunakan Anon Key atau Publishable Key (sb_publishable_...).',
+    };
+  }
+
+  const jwtParts = cleaned.split('.');
+  if (jwtParts.length === 3 && cleaned.startsWith('eyJ')) {
+    try {
+      const base64 = jwtParts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = JSON.parse(atob(base64));
+      if (jsonPayload?.role === 'service_role') {
+        return {
+          valid: false,
+          error: 'Dilarang menggunakan JWT service_role key di frontend. Gunakan anon key atau publishable key.',
+        };
+      }
+      if (jsonPayload?.ref && jsonPayload.ref !== EXPECTED_SUPABASE_PROJECT_REF) {
+        return {
+          valid: false,
+          error: `API Key bukan berasal dari project Supabase ${EXPECTED_SUPABASE_PROJECT_REF}.`,
+        };
+      }
+    } catch {
+      // Abaikan error parsing base64 parsial, lanjutkan validasi panjang
+    }
+  }
+
+  return { valid: true };
 };
 
-// Periksa apakah kredensial Supabase sudah disetel via env atau localStorage
-export const getSupabaseConfig = () => {
+// Validasi Anon / Publishable Key Supabase
+export const isValidSupabaseKey = (keyString: string | null | undefined): boolean => {
+  return validateSupabaseKeyDetail(keyString).valid;
+};
+
+export interface SupabaseConfigResult {
+  url: string;
+  key: string;
+  isConfigured: boolean;
+  source: 'env' | 'localStorage' | 'mixed' | 'none';
+  envError?: string;
+}
+
+// Environment Variables (Vercel/Vite) adalah sumber utama; localStorage hanya fallback & dibersihkan bila usang/invalid
+export const getSupabaseConfig = (): SupabaseConfigResult => {
+  const envUrlRaw = getEnvSupabaseUrl();
+  const envKeyRaw = getEnvSupabaseKey();
+
+  const envUrlCheck = validateSupabaseUrlDetail(envUrlRaw);
+  const envKeyCheck = validateSupabaseKeyDetail(envKeyRaw);
+
   let localUrl = '';
   let localKey = '';
   try {
-    localUrl = cleanCredentialString(localStorage.getItem('sibahar_supabase_url'));
-    localKey = cleanCredentialString(localStorage.getItem('sibahar_supabase_key'));
+    localUrl = normalizeSupabaseUrl(localStorage.getItem(STORAGE_URL_KEY));
+    localKey = cleanCredentialString(localStorage.getItem(STORAGE_ANON_KEY));
   } catch {
     // Ignore localStorage errors in restricted environments
   }
 
-  // Jika di localStorage terdapat data placeholder atau URL rusak, bersihkan otomatis
-  if (localUrl && !isValidSupabaseUrl(localUrl)) {
-    try {
-      localStorage.removeItem('sibahar_supabase_url');
-    } catch {}
-    localUrl = '';
+  // Jika localStorage menyimpan URL lama / tidak cocok project reference / rusak -> hapus key URL tersebut saja (jangan sentuh data laporan)
+  if (localUrl) {
+    const localUrlCheck = validateSupabaseUrlDetail(localUrl);
+    if (!localUrlCheck.valid || (envUrlCheck.valid && localUrlCheck.normalizedUrl !== envUrlCheck.normalizedUrl)) {
+      try {
+        localStorage.removeItem(STORAGE_URL_KEY);
+      } catch {}
+      localUrl = '';
+    } else {
+      localUrl = localUrlCheck.normalizedUrl;
+    }
   }
-  if (localKey && !isValidSupabaseKey(localKey)) {
-    try {
-      localStorage.removeItem('sibahar_supabase_key');
-    } catch {}
-    localKey = '';
+
+  if (localKey) {
+    const localKeyCheck = validateSupabaseKeyDetail(localKey);
+    if (!localKeyCheck.valid || (envKeyCheck.valid && localKey !== envKeyRaw)) {
+      try {
+        localStorage.removeItem(STORAGE_ANON_KEY);
+      } catch {}
+      localKey = '';
+    }
   }
 
-  const cleanedEnvUrl = cleanCredentialString(envUrl);
-  const cleanedEnvKey = cleanCredentialString(envAnonKey);
+  const effectiveUrl = envUrlCheck.valid ? envUrlCheck.normalizedUrl : localUrl;
+  const effectiveKey = envKeyCheck.valid ? envKeyRaw : localKey;
 
-  const effectiveUrl = isValidSupabaseUrl(cleanedEnvUrl) 
-    ? cleanedEnvUrl 
-    : (isValidSupabaseUrl(localUrl) ? localUrl : '');
+  let source: SupabaseConfigResult['source'] = 'none';
+  if (envUrlCheck.valid && envKeyCheck.valid) {
+    source = 'env';
+  } else if (effectiveUrl && effectiveKey) {
+    source = envUrlCheck.valid || envKeyCheck.valid ? 'mixed' : 'localStorage';
+  }
 
-  const effectiveKey = isValidSupabaseKey(cleanedEnvKey) 
-    ? cleanedEnvKey 
-    : (isValidSupabaseKey(localKey) ? localKey : '');
+  let envError: string | undefined;
+  if (envUrlRaw && !envUrlCheck.valid) {
+    envError = `VITE_SUPABASE_URL: ${envUrlCheck.error}`;
+  } else if (envKeyRaw && !envKeyCheck.valid) {
+    envError = `VITE_SUPABASE_ANON_KEY / PUBLISHABLE_KEY: ${envKeyCheck.error}`;
+  }
 
-  const isConfigured = Boolean(effectiveUrl && effectiveKey);
-
-  return { url: effectiveUrl, key: effectiveKey, isConfigured };
+  return {
+    url: effectiveUrl,
+    key: effectiveKey,
+    isConfigured: Boolean(effectiveUrl && effectiveKey),
+    source,
+    envError,
+  };
 };
 
 export interface SupabaseConnectionStatus {
@@ -104,132 +253,258 @@ export interface SupabaseConnectionStatus {
   message: string;
   tablesCreated: boolean;
   url?: string;
+  source?: SupabaseConfigResult['source'];
 }
 
-// Menguji koneksi secara interaktif dan mendeteksi apakah tabel database sudah dibuat
+// Satu-satunya instance Supabase Client (Singleton) di seluruh browser context
+let singletonClient: SupabaseClient | null = null;
+let singletonCacheKey = '';
+
+export const getSupabaseClient = (): SupabaseClient | null => {
+  const { url, key, isConfigured } = getSupabaseConfig();
+  if (!isConfigured || !url || !key) {
+    return null;
+  }
+
+  const cacheKey = `${url}::${key}`;
+  if (singletonClient && singletonCacheKey === cacheKey) {
+    return singletonClient;
+  }
+
+  if (singletonClient) {
+    try {
+      singletonClient.removeAllChannels();
+    } catch {}
+  }
+
+  try {
+    // SATU-SATUNYA pemanggilan createClient() di sisi frontend untuk mencegah Multiple GoTrueClient
+    singletonClient = createClient(url, key, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storageKey: SINGLETON_AUTH_STORAGE_KEY,
+      },
+    });
+    singletonCacheKey = cacheKey;
+    return singletonClient;
+  } catch (err: any) {
+    console.warn('Gagal menginisialisasi Supabase Client:', err?.message || err);
+    singletonClient = null;
+    singletonCacheKey = '';
+    return null;
+  }
+};
+
+function interpretRestError(
+  errorObj: { message?: string; code?: string; status?: number } | null,
+  url: string,
+  source: SupabaseConfigResult['source']
+): SupabaseConnectionStatus {
+  if (!errorObj) {
+    return {
+      isConfigured: true,
+      connected: true,
+      state: 'connected',
+      message: `Terhubung ke Supabase (${url}). Database dan tabel siap digunakan.`,
+      tablesCreated: true,
+      url,
+      source,
+    };
+  }
+
+  const msg = String(errorObj.message || '');
+  const lower = msg.toLowerCase();
+  const code = String(errorObj.code || '');
+  const status = errorObj.status;
+
+  if (
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('err_name_not_resolved') ||
+    lower.includes('load failed') ||
+    lower.includes('fetch')
+  ) {
+    return {
+      isConfigured: true,
+      connected: false,
+      state: 'network_error',
+      message: `Gagal menjangkau server Supabase (${url}). Periksa koneksi internet, pastikan project Supabase (${EXPECTED_SUPABASE_PROJECT_REF}) tidak dalam status Paused, dan pastikan deployment Vercel sudah di-redeploy.`,
+      tablesCreated: false,
+      url,
+      source,
+    };
+  }
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    lower.includes('invalid api key') ||
+    lower.includes('apikey') ||
+    lower.includes('jwt') ||
+    lower.includes('unauthorized')
+  ) {
+    return {
+      isConfigured: true,
+      connected: false,
+      state: 'auth_error',
+      message: 'API Key Supabase (VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY) tidak valid atau ditolak oleh server Supabase.',
+      tablesCreated: false,
+      url,
+      source,
+    };
+  }
+
+  if (
+    code === '42P01' ||
+    code === 'PGRST205' ||
+    status === 404 ||
+    lower.includes('does not exist') ||
+    lower.includes('could not find the table') ||
+    lower.includes('relation')
+  ) {
+    return {
+      isConfigured: true,
+      connected: false,
+      state: 'needs_schema',
+      message: 'Server Supabase merespons dan API Key valid, namun tabel "profiles" / "reports" belum tersedia di database.',
+      tablesCreated: false,
+      url,
+      source,
+    };
+  }
+
+  return {
+    isConfigured: true,
+    connected: false,
+    state: 'network_error',
+    message: `Gagal terhubung ke Supabase: ${msg || 'Respon server tidak dikenali.'}`,
+    tablesCreated: false,
+    url,
+    source,
+  };
+}
+
+// Menguji koneksi nyata ke Supabase menggunakan singleton client (tanpa pernah membuat instance createClient baru)
 export const testSupabaseConnection = async (
   customUrl?: string,
   customKey?: string
 ): Promise<SupabaseConnectionStatus> => {
   const cfg = getSupabaseConfig();
-  const url = cleanCredentialString(customUrl) || cfg.url;
-  const key = cleanCredentialString(customKey) || cfg.key;
+  const rawCustomUrl = normalizeSupabaseUrl(customUrl);
+  const rawCustomKey = cleanCredentialString(customKey);
 
-  if (!url || !key) {
+  const hasCustomInput = Boolean(rawCustomUrl || rawCustomKey);
+  const targetUrl = hasCustomInput ? rawCustomUrl : cfg.url;
+  const targetKey = hasCustomInput ? rawCustomKey : cfg.key;
+
+  if (!targetUrl || !targetKey) {
     return {
       isConfigured: false,
       connected: false,
       state: 'not_configured',
-      message: 'Kredensial Supabase (URL atau Anon Key) belum diisi.',
+      message:
+        cfg.envError ||
+        'Belum terhubung: VITE_SUPABASE_URL atau VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY belum diatur.',
       tablesCreated: false,
+      source: cfg.source,
     };
   }
 
-  if (!isValidSupabaseUrl(url)) {
+  const urlCheck = validateSupabaseUrlDetail(targetUrl);
+  if (!urlCheck.valid) {
     return {
       isConfigured: false,
       connected: false,
       state: 'network_error',
-      message: 'Format URL Supabase tidak valid. Pastikan diawali https:// dan diakhiri .supabase.co',
+      message: urlCheck.error || 'Format URL Supabase tidak valid.',
       tablesCreated: false,
-      url,
+      url: targetUrl,
+      source: cfg.source,
     };
   }
 
-  if (!isValidSupabaseKey(key)) {
+  const keyCheck = validateSupabaseKeyDetail(targetKey);
+  if (!keyCheck.valid) {
     return {
       isConfigured: false,
       connected: false,
       state: 'auth_error',
-      message: 'Format Anon Key Supabase tidak valid atau terlalu pendek.',
+      message: keyCheck.error || 'Format API Key Supabase tidak valid.',
       tablesCreated: false,
-      url,
+      url: urlCheck.normalizedUrl,
+      source: cfg.source,
     };
   }
 
+  const matchesActiveConfig =
+    cfg.isConfigured &&
+    urlCheck.normalizedUrl === cfg.url &&
+    targetKey === cfg.key;
+
   try {
-    const testClient = createClient(url, key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-
-    // 1. Cek validitas API key
-    const { error: authError } = await testClient.auth.getSession();
-    if (authError && authError.message.toLowerCase().includes('apikey')) {
-      return {
-        isConfigured: true,
-        connected: false,
-        state: 'auth_error',
-        message: 'Kunci Anon Key tidak valid atau ditolak oleh server Supabase.',
-        tablesCreated: false,
-        url,
-      };
-    }
-
-    // 2. Cek apakah tabel profiles dan reports sudah dibuat di database
-    const { error: tableError } = await testClient.from('profiles').select('id').limit(1);
-
-    if (tableError) {
-      if (
-        tableError.code === '42P01' || 
-        tableError.message.includes('does not exist') ||
-        tableError.message.includes('relation')
-      ) {
+    if (matchesActiveConfig || !hasCustomInput) {
+      // Gunakan singleton client yang sama persis dengan seluruh aplikasi & Realtime
+      const client = getSupabaseClient();
+      if (!client) {
         return {
-          isConfigured: true,
-          connected: true,
-          state: 'needs_schema',
-          message: 'Server Supabase terhubung! Namun tabel "profiles" & "reports" belum dibuat di database. Silakan salin SQL Schema dan jalankan di Supabase SQL Editor.',
+          isConfigured: false,
+          connected: false,
+          state: 'not_configured',
+          message: 'Client Supabase gagal diinisialisasi. Periksa konfigurasi Environment Variables.',
           tablesCreated: false,
-          url,
+          source: cfg.source,
         };
       }
+
+      const { error: tableError, status } = await client
+        .from('profiles')
+        .select('id')
+        .limit(1);
+
+      return interpretRestError(
+        tableError ? { message: tableError.message, code: tableError.code, status } : null,
+        urlCheck.normalizedUrl,
+        cfg.source
+      );
     }
 
-    return {
-      isConfigured: true,
-      connected: true,
-      state: 'connected',
-      message: 'Supabase terhubung sempurna! Database dan tabel siap digunakan.',
-      tablesCreated: true,
-      url,
-    };
-  } catch (err: any) {
-    return {
-      isConfigured: true,
-      connected: false,
-      state: 'network_error',
-      message: `Gagal terhubung ke Supabase: ${err?.message || 'Periksa koneksi internet atau status project Supabase Anda.'}`,
-      tablesCreated: false,
-      url,
-    };
-  }
-};
-
-let cachedClient: SupabaseClient | null = null;
-let lastClientKey = '';
-
-export const getSupabaseClient = (): SupabaseClient | null => {
-  const { url, key, isConfigured } = getSupabaseConfig();
-  if (!isConfigured || !url || !key) return null;
-
-  const cacheKey = `${url}::${key}`;
-  if (cachedClient && lastClientKey === cacheKey) {
-    return cachedClient;
-  }
-
-  try {
-    cachedClient = createClient(url, key, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
+    // Jika Admin mengetes input sementara di form Pengaturan sebelum disimpan,
+    // gunakan fetch REST langsung agar TIDAK membuat instance GoTrueClient kedua.
+    const response = await fetch(`${urlCheck.normalizedUrl}/rest/v1/profiles?select=id&limit=1`, {
+      method: 'GET',
+      headers: {
+        apikey: targetKey,
+        Authorization: `Bearer ${targetKey}`,
+        Accept: 'application/json',
       },
     });
-    lastClientKey = cacheKey;
-    return cachedClient;
-  } catch {
-    cachedClient = null;
-    lastClientKey = '';
-    return null;
+
+    if (response.ok) {
+      return interpretRestError(null, urlCheck.normalizedUrl, 'localStorage');
+    }
+
+    let bodyErr: any = {};
+    try {
+      bodyErr = await response.json();
+    } catch {}
+
+    return interpretRestError(
+      {
+        message: bodyErr?.message || response.statusText || `HTTP ${response.status}`,
+        code: bodyErr?.code,
+        status: response.status,
+      },
+      urlCheck.normalizedUrl,
+      'localStorage'
+    );
+  } catch (err: any) {
+    return interpretRestError(
+      { message: err?.message || 'Failed to fetch' },
+      urlCheck.normalizedUrl,
+      cfg.source
+    );
   }
 };
 
@@ -240,11 +515,10 @@ export async function uploadAttachmentToStorage(
 ): Promise<{ url: string; error?: string }> {
   const client = getSupabaseClient();
   if (!client) {
-    return { url: '', error: 'Supabase belum dikonfigurasi' };
+    return { url: '', error: 'Supabase belum terhubung atau belum dikonfigurasi.' };
   }
 
   try {
-    const fileExt = file.name.split('.').pop();
     const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
     const filePath = `reports/${reportId}/${Date.now()}_${cleanFileName}`;
 
@@ -357,78 +631,3 @@ export async function logAuditEvent(params: {
     console.warn('Gagal mencatat audit log ke Supabase:', err);
   }
 }
-/**
- * Safe Supabase Client Proxy:
- * Mencegah error "Invalid supabaseUrl: Provided URL is malformed" saat VITE_SUPABASE_URL kosong / belum disetel.
- * Proxy ini secara dinamis menggunakan klien Supabase aktif (dari env vars atau localStorage via getSupabaseClient()).
- * Jika Supabase belum terhubung, proxy mengembalikan penanganan aman (mock/no-op) sehingga seluruh UI aplikasi tetap dapat tampil lancar.
- */
-export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
-  get(_target, prop: string | symbol) {
-    const client = getSupabaseClient();
-    if (client) {
-      const val = (client as any)[prop];
-      if (typeof val === 'function') {
-        return val.bind(client);
-      }
-      return val;
-    }
-
-    // Fallback aman ketika Supabase belum terhubung
-    if (prop === 'rpc') {
-      return async (_fn: string, _args?: any) => {
-        return {
-          data: null,
-          error: {
-            message: 'Supabase belum dikonfigurasi. Silakan isi URL dan Key di Pengaturan SIBAHAR.',
-            code: 'NOT_CONFIGURED',
-          },
-        };
-      };
-    }
-
-    if (prop === 'from') {
-      return (_table: string) => {
-        const queryBuilder: any = {
-          select: () => queryBuilder,
-          insert: () => queryBuilder,
-          update: () => queryBuilder,
-          upsert: () => queryBuilder,
-          delete: () => queryBuilder,
-          eq: () => queryBuilder,
-          match: () => queryBuilder,
-          order: () => queryBuilder,
-          limit: () => queryBuilder,
-          single: () => Promise.resolve({ data: null, error: { message: 'Supabase belum terkonfigurasi' } }),
-          maybeSingle: () => Promise.resolve({ data: null, error: null }),
-          then: (onfulfilled?: (res: any) => any, onrejected?: (err: any) => any) => {
-            const res = { data: [], error: null };
-            return Promise.resolve(res).then(onfulfilled, onrejected);
-          },
-        };
-        return queryBuilder;
-      };
-    }
-
-    if (prop === 'auth') {
-      return {
-        getSession: async () => ({ data: { session: null }, error: null }),
-        getUser: async () => ({ data: { user: null }, error: null }),
-        onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
-        signInWithPassword: async () => ({ data: null, error: { message: 'Supabase belum terkonfigurasi' } }),
-        signUp: async () => ({ data: null, error: { message: 'Supabase belum terkonfigurasi' } }),
-        signOut: async () => ({ error: null }),
-      };
-    }
-
-    if (prop === 'channel') {
-      return () => ({
-        on: () => ({
-          subscribe: () => ({}),
-        }),
-      });
-    }
-
-    return () => ({ data: null, error: null });
-  },
-});

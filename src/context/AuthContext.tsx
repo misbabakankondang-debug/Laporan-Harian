@@ -180,7 +180,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     isConfigured: false,
     connected: false,
     state: 'not_configured',
-    message: 'Kredensial Supabase belum diatur.',
+    message: 'Belum terhubung: memeriksa konfigurasi Supabase...',
     tablesCreated: false,
   });
 
