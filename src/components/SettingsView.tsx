@@ -84,7 +84,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [whatsappNotification, setWhatsappNotification] = useState(appSettings.whatsappNotification);
   const [autoSaveDraft, setAutoSaveDraft] = useState(appSettings.autoSaveDraft);
   
-  const [mainLogoUrl, setMainLogoUrl] = useState<string>(appSettings.mainLogoUrl || '');
+  const [mainLogoUrl, setMainLogoUrl] = useState<string>(
+    appSettings.mainLogoUrl || 'https://kitasiar.com/wp-content/uploads/2025/12/Logo-Sekolah-Rakyat.jpeg'
+  );
   const [kopLogoUrl, setKopLogoUrl] = useState<string>(
     appSettings.kopLogoUrl || 'https://vectorez.biz.id/wp-content/uploads/2024/05/Logo-Kementerian-Sosial-Kemensos-Republik-Indonesia@0.5x.png'
   );
@@ -138,6 +140,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Modal State for Delete User Confirmation
   const [deletingUser, setDeletingUser] = useState<UserProfile | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
 
   // User Profile Photo State
   const [userAvatarUrl, setUserAvatarUrl] = useState<string>(userProfile.avatarUrl || '');
@@ -259,15 +263,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       alert('Tidak ada laporan yang ditemukan dalam rentang tanggal tersebut.');
       return;
     }
+    setShowBulkDeleteModal(true);
+  };
 
-    const confirmed = window.confirm(
-      `PERINGATAN: Apakah Anda yakin ingin menghapus ${matchingDeleteCount} laporan yang tercatat dalam rentang tanggal ${deleteStartDate} s/d ${deleteEndDate}?\n\nTindakan ini bersifat permanen dan tidak dapat dibatalkan.`
-    );
-
-    if (confirmed && onDeleteReportsByRange) {
+  const handleConfirmBulkDelete = () => {
+    if (onDeleteReportsByRange) {
       onDeleteReportsByRange(deleteStartDate, deleteEndDate);
-      alert(`Berhasil menghapus ${matchingDeleteCount} laporan dari sistem.`);
     }
+    setShowBulkDeleteModal(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -392,35 +395,61 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleConfirmDeleteUser = async () => {
-    if (!deletingUser) return;
-    const targetDeleteId = deletingUser.id || (deletingUser as any).user_id || (deletingUser as any).uid || '';
-    
+    if (!deletingUser || isDeletingUser) return;
+    const targetDeleteId =
+      deletingUser.id ||
+      (deletingUser as any).user_id ||
+      (deletingUser as any).uid ||
+      deletingUser.email ||
+      '';
+
     if (!targetDeleteId) {
-      alert('Gagal menghapus: ID pengguna tidak ditemukan.');
+      alert('Gagal menghapus: ID atau Email pengguna tidak ditemukan.');
       return;
     }
 
-    // Memanggil fungsi RPC Supabase di sisi server database
+    setIsDeletingUser(true);
     try {
-      const { error } = await supabase.rpc('delete_user_profile', {
-        target_id: targetDeleteId,
-      });
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let rpcTargetId = uuidRegex.test(targetDeleteId) ? targetDeleteId : '';
 
-      if (error && error.code !== 'NOT_CONFIGURED') {
-        console.warn('Supabase RPC delete_user_profile warning:', error.message);
+      if (!rpcTargetId && deletingUser.email) {
+        try {
+          const { data: profileRow } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('email', deletingUser.email.toLowerCase())
+            .maybeSingle();
+          if (profileRow?.id) {
+            rpcTargetId = profileRow.id;
+          }
+        } catch {}
       }
-    } catch (rpcErr: any) {
-      console.warn('Gagal memanggil RPC delete_user_profile:', rpcErr);
-    }
 
-    // Hapus dari state lokal aplikasi
-    const res = deleteUserByAdmin(targetDeleteId);
-    if (!res.success) {
-      alert(res.error || 'Gagal menghapus pengguna.');
-    } else {
-      alert('Pengguna berhasil dihapus.');
+      // Memanggil fungsi RPC Supabase di sisi server database (menghapus public.profiles & auth.users)
+      try {
+        const { data: rpcData, error } = await supabase.rpc('delete_user_profile', {
+          target_id: rpcTargetId || deletingUser.email || targetDeleteId,
+        });
+
+        if (error && error.code !== 'NOT_CONFIGURED') {
+          console.warn('Supabase RPC delete_user_profile warning:', error.message);
+        } else if (rpcData && (rpcData as any).success === false) {
+          console.warn('Supabase RPC delete_user_profile:', (rpcData as any).error);
+        }
+      } catch (rpcErr: any) {
+        console.warn('Gagal memanggil RPC delete_user_profile:', rpcErr);
+      }
+
+      // Hapus dari state lokal & sinkron tabel profiles Supabase
+      const res = await deleteUserByAdmin(targetDeleteId);
+      if (!res.success) {
+        alert(res.error || 'Gagal menghapus pengguna.');
+      }
+      setDeletingUser(null);
+    } finally {
+      setIsDeletingUser(false);
     }
-    setDeletingUser(null);
   };
 
   const sqlSchemaSnippet = FULL_SUPABASE_SCHEMA_SQL;
@@ -1629,6 +1658,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={() => setDeletingUser(null)}
+                disabled={isDeletingUser}
                 className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium"
               >
                 Batal
@@ -1636,9 +1666,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 type="button"
                 onClick={handleConfirmDeleteUser}
+                disabled={isDeletingUser}
+                className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-xs"
+              >
+                {isDeletingUser ? 'Menghapus...' : 'Ya, Hapus Pengguna'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL KONFIRMASI HAPUS MASSAL LAPORAN ================= */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full border border-rose-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-5 h-5" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="font-bold text-slate-900 text-sm">Hapus {matchingDeleteCount} Laporan?</h3>
+              <p className="text-xs text-slate-600">
+                Laporan pada rentang tanggal <strong>{deleteStartDate || 'Awal'}</strong> s/d <strong>{deleteEndDate || 'Sekarang'}</strong> akan dihapus permanen dari riwayat dan database Supabase.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
                 className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold transition shadow-xs"
               >
-                Ya, Hapus Pengguna
+                Ya, Hapus Semua
               </button>
             </div>
           </div>

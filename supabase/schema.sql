@@ -191,6 +191,10 @@ CREATE POLICY "Profiles INSERT by Admin or Self"
     ON public.profiles FOR INSERT
     WITH CHECK (auth.uid() = id OR public.is_admin());
 
+CREATE POLICY "Profiles DELETE by Admin"
+    ON public.profiles FOR DELETE
+    USING (public.is_admin());
+
 -- Mencegah non-admin mengubah role atau status aktif sendiri
 CREATE OR REPLACE FUNCTION public.protect_profile_fields()
 RETURNS TRIGGER AS $$
@@ -239,21 +243,24 @@ CREATE POLICY "Reports INSERT Policy"
         public.is_user_active() AND auth.uid() = user_id
     );
 
--- 3. UPDATE: HANYA pemilik laporan sendiri. Kepala Sekolah TIDAK BISA mengubah laporan orang lain.
+-- 3. UPDATE: Pemilik laporan sendiri atau Kepala Sekolah (untuk pembaruan status).
 CREATE POLICY "Reports UPDATE Policy"
     ON public.reports FOR UPDATE
     USING (
-        public.is_user_active() AND auth.uid() = user_id
+        public.is_user_active() AND (auth.uid() = user_id OR public.is_kepala_sekolah())
     )
     WITH CHECK (
-        public.is_user_active() AND auth.uid() = user_id
+        public.is_user_active() AND (auth.uid() = user_id OR public.is_kepala_sekolah())
     );
 
--- 4. DELETE: HANYA pemilik laporan sendiri. Kepala Sekolah TIDAK BISA menghapus laporan orang lain.
+-- 4. DELETE: Pemilik laporan sendiri atau Kepala Sekolah khusus laporan berstatus Selesai.
 CREATE POLICY "Reports DELETE Policy"
     ON public.reports FOR DELETE
     USING (
-        public.is_user_active() AND auth.uid() = user_id
+        public.is_user_active() AND (
+            auth.uid() = user_id
+            OR (public.is_kepala_sekolah() AND status = 'selesai')
+        )
     );
 
 -- --- D. KEBIJAKAN RLS NOTIFICATIONS ---
@@ -367,12 +374,22 @@ DECLARE
     target_role user_role_type;
     admin_count INT;
 BEGIN
-    -- 1. Validasi format UUID
-    BEGIN
-        target_uuid := target_id::UUID;
-    EXCEPTION WHEN OTHERS THEN
-        RETURN jsonb_build_object('success', false, 'error', 'Format ID target tidak valid (harus berupa UUID).');
-    END;
+    -- 1. Validasi format UUID atau cari berdasarkan email
+    IF target_id LIKE '%@%' THEN
+        SELECT id INTO target_uuid FROM auth.users WHERE LOWER(email) = LOWER(target_id) LIMIT 1;
+        IF target_uuid IS NULL THEN
+            SELECT id INTO target_uuid FROM public.profiles WHERE LOWER(email) = LOWER(target_id) LIMIT 1;
+        END IF;
+        IF target_uuid IS NULL THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Pengguna dengan email tersebut tidak ditemukan di database Supabase.');
+        END IF;
+    ELSE
+        BEGIN
+            target_uuid := target_id::UUID;
+        EXCEPTION WHEN OTHERS THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Format ID target tidak valid (harus berupa UUID atau email).');
+        END;
+    END IF;
 
     -- 2. Cek autentikasi penyeru
     IF auth.uid() IS NULL THEN

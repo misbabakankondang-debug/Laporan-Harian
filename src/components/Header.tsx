@@ -11,6 +11,7 @@ interface HeaderProps {
   onMarkNotificationRead: (id: string) => void;
   onMarkAllNotificationsRead: () => void;
   onSelectReportFromNotif: (reportId: string) => void;
+  mainLogoUrl?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,6 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
   onSelectReportFromNotif,
+  mainLogoUrl,
 }) => {
   const [showNotifMenu, setShowNotifMenu] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -81,6 +83,13 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <Menu className="w-5 h-5" />
         </button>
+        <div className="md:hidden w-9 h-9 rounded-xl bg-white p-0.5 flex items-center justify-center shrink-0 border border-emerald-300 shadow-2xs overflow-hidden">
+          <img
+            src={mainLogoUrl || 'https://kitasiar.com/wp-content/uploads/2025/12/Logo-Sekolah-Rakyat.jpeg'}
+            alt="Logo Sekolah Rakyat"
+            className="w-full h-full object-contain"
+          />
+        </div>
         <div>
           <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight">
             {getPageTitle()}

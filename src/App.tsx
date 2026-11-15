@@ -65,7 +65,15 @@ function SIBAHARAppContent() {
         if (parsed.ticketPrefix === 'REP-2026') {
           return initialSettings;
         }
-        return parsed;
+        return {
+          ...initialSettings,
+          ...parsed,
+          mainLogoUrl: parsed.mainLogoUrl || initialSettings.mainLogoUrl,
+          ticketPrefix:
+            !parsed.ticketPrefix || parsed.ticketPrefix === 'Tanggal Input Laporan/Nomor Urut'
+              ? initialSettings.ticketPrefix
+              : parsed.ticketPrefix,
+        };
       }
       return initialSettings;
     } catch {
@@ -322,7 +330,22 @@ function SIBAHARAppContent() {
   };
 
   const handleDeleteDraft = (draftId: string) => {
-    setReports((prev) => prev.filter((r) => r.id !== draftId));
+    setReports((prev) => {
+      const updated = prev.filter((r) => r.id !== draftId);
+      try {
+        localStorage.setItem('sibahar_items', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    const client = getSupabaseClient();
+    if (client) {
+      client.from('reports').delete().eq('id', draftId).then(
+        ({ error }) => {
+          if (error) console.warn('Supabase draft delete warning:', error.message);
+        },
+        () => {}
+      );
+    }
   };
 
   const handleEditReport = (updatedReport: ReportItem) => {
@@ -375,27 +398,30 @@ function SIBAHARAppContent() {
     });
   };
 
-  const handleDeleteReport = (reportId: string) => {
-    setReports((prev) => prev.filter((r) => r.id !== reportId));
+  const handleDeleteReport = async (reportId: string) => {
+    setReports((prev) => {
+      const updated = prev.filter((r) => r.id !== reportId);
+      try {
+        localStorage.setItem('sibahar_items', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     if (selectedReportForDetail?.id === reportId) {
       setSelectedReportForDetail(null);
     }
 
-    // Sync to Supabase
+    // Sync deletion to Supabase (reports & notifications)
     const client = getSupabaseClient();
     if (client) {
-      client
-        .from('reports')
-        .delete()
-        .eq('id', reportId)
-        .then(
-          ({ error }) => {
-            if (error) console.warn('Supabase delete error:', error.message);
-          },
-          (err: any) => {
-            console.warn('Supabase delete network warning (Failed to fetch):', err?.message || err);
-          }
-        );
+      try {
+        const { error: repErr } = await client.from('reports').delete().eq('id', reportId);
+        if (repErr) console.warn('Supabase delete report error:', repErr.message);
+
+        const { error: notifErr } = await client.from('notifications').delete().eq('report_id', reportId);
+        if (notifErr) console.warn('Supabase delete report notifications warning:', notifErr.message);
+      } catch (err: any) {
+        console.warn('Supabase delete network warning (Failed to fetch):', err?.message || err);
+      }
     }
 
     const newNotif: NotificationItem = {
@@ -420,7 +446,7 @@ function SIBAHARAppContent() {
     });
   };
 
-  const handleDeleteReportsByRange = (startDate: string, endDate: string) => {
+  const handleDeleteReportsByRange = async (startDate: string, endDate: string) => {
     const start = startDate ? new Date(startDate).getTime() : 0;
     const end = endDate ? new Date(endDate + 'T23:59:59').getTime() : Infinity;
 
@@ -432,12 +458,33 @@ function SIBAHARAppContent() {
     const count = toDelete.length;
     if (count === 0) return;
 
-    setReports((prev) =>
-      prev.filter((r) => {
+    const idsToDelete = toDelete.map((r) => r.id);
+
+    setReports((prev) => {
+      const updated = prev.filter((r) => {
         const d = new Date(r.incidentDate || r.createdAt).getTime();
         return !(d >= start && d <= end);
-      })
-    );
+      });
+      try {
+        localStorage.setItem('sibahar_items', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    if (selectedReportForDetail && idsToDelete.includes(selectedReportForDetail.id)) {
+      setSelectedReportForDetail(null);
+    }
+
+    // Sync bulk deletion to Supabase
+    const client = getSupabaseClient();
+    if (client && idsToDelete.length > 0) {
+      try {
+        const { error } = await client.from('reports').delete().in('id', idsToDelete);
+        if (error) console.warn('Supabase bulk delete reports error:', error.message);
+      } catch (err: any) {
+        console.warn('Supabase bulk delete network warning:', err?.message || err);
+      }
+    }
 
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
@@ -737,6 +784,7 @@ function SIBAHARAppContent() {
           onOpenMobileSidebar={() => setIsOpenMobileSidebar(true)}
           onSwitchTab={setCurrentTab}
           notifications={notifications}
+          mainLogoUrl={appSettings.mainLogoUrl}
           onMarkNotificationRead={(id) => {
             setNotifications((prev) =>
               prev.map((n) => (n.id === id ? { ...n, read: true } : n))
@@ -767,6 +815,7 @@ function SIBAHARAppContent() {
                 }
               }}
               onViewReport={(report) => setSelectedReportForDetail(report)}
+              onDeleteReport={handleDeleteReport}
             />
           )}
 
@@ -805,6 +854,8 @@ function SIBAHARAppContent() {
               onDeleteReport={handleDeleteReport}
               initialStatusFilter={historyStatusFilter}
               currentUserId={currentUser.id}
+              currentUserName={currentUser.name}
+              currentUserEmail={currentUser.email}
               currentUserRole={currentRole}
             />
           )}

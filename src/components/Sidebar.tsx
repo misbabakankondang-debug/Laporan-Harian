@@ -5,7 +5,6 @@ import {
   BarChart3, 
   ListFilter, 
   Settings, 
-  FileText,
   X,
   PhoneCall,
   UserCheck,
@@ -38,9 +37,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userProfile,
   isOpenMobile,
   onCloseMobile,
-  mainLogoUrl,
+  mainLogoUrl = 'https://kitasiar.com/wp-content/uploads/2025/12/Logo-Sekolah-Rakyat.jpeg',
   helpDeskNumber = '8800 / 8801',
 }) => {
+  const effectiveLogoUrl = mainLogoUrl || 'https://kitasiar.com/wp-content/uploads/2025/12/Logo-Sekolah-Rakyat.jpeg';
   const navItems = [
     {
       id: 'dashboard' as TabType,
@@ -116,15 +116,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Brand / Logo */}
           <div className="h-20 flex items-center justify-between px-5 border-b border-emerald-200/80 bg-white/80 backdrop-blur-xs">
             <div className="flex items-center gap-3">
-              {mainLogoUrl ? (
-                <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center shrink-0 border border-emerald-300 shadow-sm overflow-hidden">
-                  <img src={mainLogoUrl} alt="Logo SIBAHAR" className="w-full h-full object-contain" />
-                </div>
-              ) : (
-                <div className="bg-emerald-600 p-2.5 rounded-xl text-white shadow-sm shrink-0 border border-emerald-500">
-                  <FileText className="w-5 h-5" />
-                </div>
-              )}
+              <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center shrink-0 border border-emerald-300 shadow-sm overflow-hidden">
+                <img src={effectiveLogoUrl} alt="Logo SIBAHAR" className="w-full h-full object-contain" />
+              </div>
               <div className="min-w-0">
                 <span className="font-extrabold text-lg tracking-tight text-emerald-950 block">SIBAHAR</span>
                 <span className="text-[9px] text-emerald-700 font-semibold block -mt-0.5 tracking-wide leading-tight line-clamp-2">

@@ -21,6 +21,8 @@ interface HistoryTrackingViewProps {
   onDeleteReport: (reportId: string) => void;
   initialStatusFilter?: string;
   currentUserId?: string;
+  currentUserName?: string;
+  currentUserEmail?: string;
   currentUserRole?: UserRole;
 }
 
@@ -32,6 +34,8 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
   onDeleteReport,
   initialStatusFilter = 'all',
   currentUserId,
+  currentUserName,
+  currentUserEmail,
   currentUserRole = 'kepala_sekolah',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -145,9 +149,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
 
   const handleDeleteClick = (e: React.MouseEvent, report: ReportItem) => {
     e.stopPropagation();
-    if (window.confirm(`Apakah Anda yakin ingin menghapus laporan "${report.id} - ${report.title}"? Tindakan ini tidak dapat dibatalkan.`)) {
-      onDeleteReport(report.id);
-    }
+    onDeleteReport(report.id);
   };
 
   const handleEditClick = (e: React.MouseEvent, report: ReportItem) => {
@@ -397,19 +399,35 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                           </button>
 
                           {/* Sesuai Hak Akses RBAC:
-                              Kepala Sekolah dapat melihat SEMUA laporan, tetapi TIDAK DAPAT mengedit/menghapus laporan milik staf lain.
-                              Hanya pemilik laporan (atau staf pembuat) yang dapat mengedit/menghapus laporannya sendiri.
+                              - Pemilik laporan selalu dapat mengedit & menghapus laporannya sendiri.
+                              - Kepala Sekolah dapat menghapus laporan masuk yang sudah berstatus Selesai.
                           */}
                           {(() => {
-                            const isOwner = (report.userId && currentUserId && report.userId === currentUserId) ||
+                            const isOwner =
+                              (report.userId && currentUserId && report.userId === currentUserId) ||
+                              (currentUserName && report.reporterName?.toLowerCase() === currentUserName.toLowerCase()) ||
+                              (currentUserEmail && report.reporterEmail?.toLowerCase() === currentUserEmail.toLowerCase()) ||
                               (!report.userId && currentUserRole !== 'kepala_sekolah');
                             const canEditDelete = currentUserRole !== 'kepala_sekolah' || isOwner;
+                            const canKepsekDeleteCompleted = currentUserRole === 'kepala_sekolah' && !isOwner && report.status === 'selesai';
 
                             if (!canEditDelete) {
+                              if (canKepsekDeleteCompleted) {
+                                return (
+                                  <button
+                                    onClick={(e) => handleDeleteClick(e, report)}
+                                    className="px-2 py-1 text-rose-700 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-md border border-rose-200 transition flex items-center gap-1 text-[11px] font-semibold cursor-pointer"
+                                    title="Hapus Laporan yang Sudah Selesai"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Hapus</span>
+                                  </button>
+                                );
+                              }
                               return (
                                 <span 
                                   className="text-[10.5px] font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded border border-slate-200 cursor-not-allowed"
-                                  title="Wewenang Kepala Sekolah: Hanya Baca (Tidak dapat mengedit/menghapus laporan milik staf lain)"
+                                  title="Wewenang Kepala Sekolah: Hanya Baca (Dapat dihapus setelah ditandai Selesai)"
                                 >
                                   Hanya Baca
                                 </span>
@@ -421,7 +439,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                                 {/* Edit Menu */}
                                 <button
                                   onClick={(e) => handleEditClick(e, report)}
-                                  className="p-1.5 text-slate-600 bg-slate-100 hover:bg-amber-50 hover:text-amber-700 rounded-md transition"
+                                  className="p-1.5 text-slate-600 bg-slate-100 hover:bg-amber-50 hover:text-amber-700 rounded-md transition cursor-pointer"
                                   title="Edit Laporan Milik Sendiri"
                                 >
                                   <Pencil className="w-3.5 h-3.5" />
@@ -430,7 +448,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                                 {/* Hapus Menu */}
                                 <button
                                   onClick={(e) => handleDeleteClick(e, report)}
-                                  className="p-1.5 text-slate-600 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 rounded-md transition"
+                                  className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-md transition cursor-pointer"
                                   title="Hapus Laporan Milik Sendiri"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />

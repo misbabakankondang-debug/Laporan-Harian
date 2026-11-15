@@ -63,14 +63,38 @@ const migrateUsersList = (users: UserProfile[]): UserProfile[] => {
     }
   });
 
-  // Pastikan seluruh 6 peran canonical selalu tersedia
+  const getDeletedUsersSet = (): Set<string> => {
+    try {
+      const saved = localStorage.getItem('sibahar_deleted_users');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return new Set(parsed.map((s: string) => String(s).toLowerCase()));
+        }
+      }
+    } catch {}
+    return new Set();
+  };
+
+  const deletedSet = getDeletedUsersSet();
+
+  // Pastikan seluruh 6 peran canonical tersedia kecuali yang sengaja telah dihapus Admin
   CANONICAL_ROLE_USERS.forEach((can) => {
+    const emailLower = can.email.toLowerCase();
+    const idLower = (can.id || '').toLowerCase();
+    if (deletedSet.has(emailLower) || (idLower && deletedSet.has(idLower))) {
+      return;
+    }
     if (!result.some((r) => r.roleKey === can.roleKey)) {
       result.push(can);
     }
   });
 
-  return result;
+  return result.filter((u) => {
+    const emailLower = u.email.toLowerCase();
+    const idLower = (u.id || '').toLowerCase();
+    return !deletedSet.has(emailLower) && (!idLower || !deletedSet.has(idLower));
+  });
 };
 
 interface AuthContextType {
@@ -91,7 +115,7 @@ interface AuthContextType {
   updateUserRoleByAdmin: (userId: string, newRole: UserRole) => void;
   addNewUserByAdmin: (user: { name: string; email: string; roleKey: UserRole; nip?: string; department?: string; phone?: string; defaultPassword?: string }) => UserProfile;
   updateUserByAdmin: (userId: string, updates: Partial<UserProfile>) => void;
-  deleteUserByAdmin: (userId: string) => { success: boolean; error?: string };
+  deleteUserByAdmin: (userId: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -542,6 +566,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       avatarInitials: initials,
     };
 
+    // Hapus dari daftar terhapus jika email didaftarkan kembali oleh Admin
+    try {
+      const saved = localStorage.getItem('sibahar_deleted_users');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((item: string) => item.toLowerCase() !== newUser.email.toLowerCase());
+          localStorage.setItem('sibahar_deleted_users', JSON.stringify(filtered));
+        }
+      }
+    } catch {}
+
     setAllUsersList((prev) => {
       // Periksa apakah email sudah ada
       const existing = prev.find((u) => u.email.toLowerCase() === newUser.email.toLowerCase());
@@ -691,15 +727,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // 3. Hapus Pengguna oleh Admin
-  const deleteUserByAdmin = (userId: string): { success: boolean; error?: string } => {
-    if (currentUser.id === userId) {
-      return { success: false, error: 'Tidak dapat menghapus akun yang sedang Anda gunakan saat ini.' };
-    }
-
-    const targetUser = allUsersList.find((u) => u.id === userId);
+  // 3. Hapus Pengguna oleh Admin (Sinkron penuh dengan Supabase RPC & Tabel Profiles)
+  const deleteUserByAdmin = async (userId: string): Promise<{ success: boolean; error?: string }> => {
+    const targetUser = allUsersList.find((u) => u.id === userId || u.email === userId);
     if (!targetUser) {
       return { success: false, error: 'Pengguna tidak ditemukan.' };
+    }
+
+    if (currentUser.id === targetUser.id || currentUser.email.toLowerCase() === targetUser.email.toLowerCase()) {
+      return { success: false, error: 'Tidak dapat menghapus akun yang sedang Anda gunakan saat ini.' };
     }
 
     // Pastikan tidak menghapus seluruh admin jika hanya ada 1 admin
@@ -708,22 +744,71 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return { success: false, error: 'Sistem harus memiliki minimal satu akun Administrator.' };
     }
 
-    // Sinkronisasi hapus ke Supabase jika terhubung
+    // Catat ke daftar terhapus agar tidak muncul lagi saat reload
+    try {
+      const saved = localStorage.getItem('sibahar_deleted_users');
+      const existing: string[] = saved ? JSON.parse(saved) : [];
+      const next = Array.from(new Set([
+        ...existing,
+        targetUser.email.toLowerCase(),
+        ...(targetUser.id ? [targetUser.id.toLowerCase()] : []),
+      ]));
+      localStorage.setItem('sibahar_deleted_users', JSON.stringify(next));
+    } catch {}
+
+    // Hapus segera dari state lokal
+    setAllUsersList((prev) => prev.filter((u) => u.id !== targetUser.id && u.email.toLowerCase() !== targetUser.email.toLowerCase()));
+
+    // Sinkronisasi penghapusan permanen ke Database Supabase (auth.users & public.profiles)
     const client = getSupabaseClient();
     if (client) {
-      client
-        .from('profiles')
-        .delete()
-        .eq('id', userId)
-        .then(
-          ({ error }) => {
-            if (error) console.warn('Supabase profile delete warning:', error.message);
-          },
-          (err: any) => console.warn('Supabase profile delete network warning:', err?.message || err)
-        );
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let resolvedUuid = targetUser.id && uuidRegex.test(targetUser.id) ? targetUser.id : '';
+
+      try {
+        // Jika ID lokal bukan UUID (misal usr-guru-001), cari UUID asli di tabel profiles via email
+        if (!resolvedUuid && targetUser.email) {
+          const { data: foundProfile } = await client
+            .from('profiles')
+            .select('id')
+            .eq('email', targetUser.email.toLowerCase())
+            .maybeSingle();
+          if (foundProfile?.id) {
+            resolvedUuid = foundProfile.id;
+          }
+        }
+
+        // 1) Panggil RPC delete_user_profile untuk menghapus auth.users + public.profiles sekaligus
+        const rpcTarget = resolvedUuid || targetUser.email;
+        if (rpcTarget) {
+          const { data: rpcData, error: rpcError } = await client.rpc('delete_user_profile', {
+            target_id: rpcTarget,
+          });
+          if (rpcError) {
+            console.warn('Supabase RPC delete_user_profile warning:', rpcError.message);
+          } else if (rpcData && rpcData.success === false) {
+            console.warn('Supabase RPC delete_user_profile returned false:', rpcData.error);
+          }
+        }
+
+        // 2) Fallback penghapusan langsung pada tabel public.profiles berdasarkan UUID atau email
+        if (resolvedUuid) {
+          const { error: delByIdErr } = await client.from('profiles').delete().eq('id', resolvedUuid);
+          if (delByIdErr) {
+            console.warn('Supabase profiles delete by id warning:', delByIdErr.message);
+          }
+        }
+        if (targetUser.email) {
+          const { error: delByEmailErr } = await client.from('profiles').delete().eq('email', targetUser.email.toLowerCase());
+          if (delByEmailErr) {
+            console.warn('Supabase profiles delete by email warning:', delByEmailErr.message);
+          }
+        }
+      } catch (err: any) {
+        console.warn('Supabase user delete network warning:', err?.message || err);
+      }
     }
 
-    setAllUsersList((prev) => prev.filter((u) => u.id !== userId));
     return { success: true };
   };
 

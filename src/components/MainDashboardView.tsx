@@ -21,7 +21,8 @@ import {
   GraduationCap,
   Shield,
   Home,
-  HeartHandshake
+  HeartHandshake,
+  Trash2
 } from 'lucide-react';
 import { ReportItem, UserProfile, AppSettings, UserRole, USER_ROLES } from '../types/report';
 import { categoryLabels, priorityLabels, statusLabels, formatDateOnly, formatDateTime } from '../utils/formatters';
@@ -34,6 +35,7 @@ interface MainDashboardViewProps {
   appSettings: AppSettings;
   onNavigateToTab: (tab: 'create' | 'stats' | 'history' | 'settings') => void;
   onViewReport: (report: ReportItem) => void;
+  onDeleteReport?: (reportId: string) => void;
 }
 
 export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
@@ -42,8 +44,10 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
   appSettings,
   onNavigateToTab,
   onViewReport,
+  onDeleteReport,
 }) => {
   const { currentRole, allUsersList } = useAuth();
+  const [confirmDeleteReport, setConfirmDeleteReport] = useState<ReportItem | null>(null);
   const isKepalaSekolah = currentRole === 'kepala_sekolah';
   const isAdmin = currentRole === 'admin';
 
@@ -612,16 +616,32 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                       </p>
                     </div>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onViewReport(item);
-                      }}
-                      className="px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-600 hover:text-white rounded-lg border border-emerald-200 transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>Detail</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onViewReport(item);
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-600 hover:text-white rounded-lg border border-emerald-200 transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Detail</span>
+                      </button>
+
+                      {isKepalaSekolah && item.status === 'selesai' && onDeleteReport && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteReport(item);
+                          }}
+                          className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-lg border border-rose-200 transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                          title="Hapus Laporan yang Sudah Selesai"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Hapus</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -665,6 +685,46 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Modal Konfirmasi Hapus Laporan Selesai (Kepala Sekolah) */}
+      {confirmDeleteReport && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full border border-rose-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-5 h-5" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="font-bold text-slate-900 text-sm">Hapus Laporan Selesai?</h3>
+              <p className="text-xs text-slate-600">
+                Laporan <strong>#{confirmDeleteReport.id}</strong> ({confirmDeleteReport.title}) sudah berstatus <strong>Selesai</strong>. Apakah Anda yakin ingin menghapusnya dari sistem dan database Supabase?
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteReport(null)}
+                className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDeleteReport) {
+                    onDeleteReport(confirmDeleteReport.id);
+                  }
+                  setConfirmDeleteReport(null);
+                }}
+                className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold transition shadow-xs cursor-pointer"
+              >
+                Ya, Hapus Laporan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
