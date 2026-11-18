@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import { UserProfile, UserRole, USER_ROLES } from '../types/report';
 import { DEFAULT_ROLE_USERS, CANONICAL_ROLE_USERS, initialProfile } from '../data/initialData';
 import { getSupabaseClient, testSupabaseConnection, SupabaseConnectionStatus } from '../lib/supabase';
@@ -180,11 +180,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     isConfigured: false,
     connected: false,
     state: 'not_configured',
-    message: 'Belum terhubung: memeriksa konfigurasi Supabase...',
+    gatewayConnected: false,
+    apiKeyValid: false,
+    databaseAccessible: false,
+    httpStatus: null,
+    errorCode: null,
+    message: 'Memeriksa konfigurasi dan koneksi Supabase...',
+    testedAt: '',
     tablesCreated: false,
   });
 
   const isSupabaseConnected = supabaseStatus.connected;
+  const inFlightCheckRef = useRef<Promise<SupabaseConnectionStatus> | null>(null);
 
   useEffect(() => {
     localStorage.setItem('sibahar_active_user', JSON.stringify(currentUser));
@@ -194,11 +201,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.setItem('sibahar_all_users', JSON.stringify(allUsersList));
   }, [allUsersList]);
 
-  // Fungsi pengujian koneksi Supabase yang dapat dipicu manual dari Settings
+  // Fungsi pengujian koneksi Supabase tanpa duplikasi request bersamaan
   const checkSupabaseConnection = useCallback(async (customUrl?: string, customKey?: string) => {
-    const status = await testSupabaseConnection(customUrl, customKey);
-    setSupabaseStatus(status);
-    return status;
+    const isDefaultCheck = customUrl === undefined && customKey === undefined;
+    if (isDefaultCheck && inFlightCheckRef.current) {
+      return inFlightCheckRef.current;
+    }
+
+    const promise = testSupabaseConnection(customUrl, customKey)
+      .then((status) => {
+        setSupabaseStatus(status);
+        return status;
+      })
+      .finally(() => {
+        if (isDefaultCheck) {
+          inFlightCheckRef.current = null;
+        }
+      });
+
+    if (isDefaultCheck) {
+      inFlightCheckRef.current = promise;
+    }
+
+    return promise;
   }, []);
 
   // Periksa koneksi Supabase di awal dan sinkronkan daftar profil
@@ -248,6 +273,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Listen to Supabase auth state change
     const { data: { subscription } } = client.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+        checkSupabaseConnection();
+      }
+
       if (session?.user) {
         try {
           // Fetch profile

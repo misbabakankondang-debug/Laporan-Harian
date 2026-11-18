@@ -20,16 +20,28 @@ export const normalizeSupabaseUrl = (urlString: string | null | undefined): stri
   return cleaned.replace(/\/+$/, '');
 };
 
+export const isPublishableApiKey = (keyString: string | null | undefined): boolean => {
+  return cleanCredentialString(keyString).startsWith('sb_publishable_');
+};
+
 export const getEnvSupabaseUrl = (): string => {
   return normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
 };
 
+// Membaca dan memvalidasi kandidat API Key dari Environment Variables (anon key JWT maupun sb_publishable_)
 export const getEnvSupabaseKey = (): string => {
-  return cleanCredentialString(
-    import.meta.env.VITE_SUPABASE_ANON_KEY ||
-      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-      ''
-  );
+  const candidates = [
+    cleanCredentialString(import.meta.env.VITE_SUPABASE_ANON_KEY),
+    cleanCredentialString(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && validateSupabaseKeyDetail(candidate).valid) {
+      return candidate;
+    }
+  }
+
+  return '';
 };
 
 export interface UrlValidationResult {
@@ -112,20 +124,25 @@ export interface KeyValidationResult {
   error?: string;
 }
 
-// Validasi Anon Key / Publishable Key (dan cegah pemakaian Service Role Key di browser)
+// Validasi Anon Key (JWT) atau Publishable Key (sb_publishable_), dan blokir Secret / Service Role Key
 export const validateSupabaseKeyDetail = (keyString: string | null | undefined): KeyValidationResult => {
   const cleaned = cleanCredentialString(keyString);
   if (!cleaned) {
     return { valid: false, error: 'Anon Key / Publishable Key Supabase belum diisi.' };
   }
 
+  const lower = cleaned.toLowerCase();
   if (
+    /\s/.test(cleaned) ||
     cleaned.includes('<') ||
     cleaned.includes('>') ||
     cleaned.includes('[') ||
     cleaned.includes(']') ||
-    cleaned.includes('your-anon-key') ||
-    cleaned.includes('your-anon-publishable-key') ||
+    lower.includes('your-anon-key') ||
+    lower.includes('your-anon-publishable-key') ||
+    lower.includes('your-publishable-key') ||
+    lower.includes('placeholder') ||
+    lower.includes('changeme') ||
     cleaned.length < 25
   ) {
     return {
@@ -142,29 +159,52 @@ export const validateSupabaseKeyDetail = (keyString: string | null | undefined):
     };
   }
 
-  const jwtParts = cleaned.split('.');
-  if (jwtParts.length === 3 && cleaned.startsWith('eyJ')) {
+  // Format baru sb_publishable_ bukan JWT, sehingga tidak boleh diparse sebagai JWT
+  if (cleaned.startsWith('sb_publishable_')) {
+    return { valid: true };
+  }
+
+  // Format JWT lama (eyJ...): wajib 3 segmen valid & role bukan service_role
+  if (cleaned.startsWith('eyJ')) {
+    const jwtParts = cleaned.split('.');
+    if (jwtParts.length !== 3 || jwtParts.some((part) => !part)) {
+      return {
+        valid: false,
+        error: 'Format JWT Anon Key Supabase tidak lengkap atau rusak.',
+      };
+    }
+
     try {
       const base64 = jwtParts[1].replace(/-/g, '+').replace(/_/g, '/');
       const jsonPayload = JSON.parse(atob(base64));
-      if (jsonPayload?.role === 'service_role') {
+      if (!jsonPayload || typeof jsonPayload !== 'object') {
+        return { valid: false, error: 'Payload JWT Anon Key Supabase tidak valid.' };
+      }
+      if (jsonPayload.role === 'service_role') {
         return {
           valid: false,
           error: 'Dilarang menggunakan JWT service_role key di frontend. Gunakan anon key atau publishable key.',
         };
       }
-      if (jsonPayload?.ref && jsonPayload.ref !== EXPECTED_SUPABASE_PROJECT_REF) {
+      if (jsonPayload.ref && jsonPayload.ref !== EXPECTED_SUPABASE_PROJECT_REF) {
         return {
           valid: false,
           error: `API Key bukan berasal dari project Supabase ${EXPECTED_SUPABASE_PROJECT_REF}.`,
         };
       }
+      return { valid: true };
     } catch {
-      // Abaikan error parsing base64 parsial, lanjutkan validasi panjang
+      return {
+        valid: false,
+        error: 'Payload JWT Anon Key Supabase tidak dapat didekode.',
+      };
     }
   }
 
-  return { valid: true };
+  return {
+    valid: false,
+    error: 'Format API Key tidak dikenali. Gunakan Anon Key (eyJ...) atau Publishable Key (sb_publishable_...).',
+  };
 };
 
 // Validasi Anon / Publishable Key Supabase
@@ -230,11 +270,16 @@ export const getSupabaseConfig = (): SupabaseConfigResult => {
     source = envUrlCheck.valid || envKeyCheck.valid ? 'mixed' : 'localStorage';
   }
 
+  const envAnonRaw = cleanCredentialString(import.meta.env.VITE_SUPABASE_ANON_KEY);
+  const envPubRaw = cleanCredentialString(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY);
+  const envKeyCandidateRaw = envKeyRaw || envAnonRaw || envPubRaw;
+
   let envError: string | undefined;
   if (envUrlRaw && !envUrlCheck.valid) {
     envError = `VITE_SUPABASE_URL: ${envUrlCheck.error}`;
-  } else if (envKeyRaw && !envKeyCheck.valid) {
-    envError = `VITE_SUPABASE_ANON_KEY / PUBLISHABLE_KEY: ${envKeyCheck.error}`;
+  } else if (envKeyCandidateRaw && !envKeyCheck.valid) {
+    const failedCheck = validateSupabaseKeyDetail(envKeyCandidateRaw);
+    envError = `VITE_SUPABASE_ANON_KEY / PUBLISHABLE_KEY: ${failedCheck.error}`;
   }
 
   return {
@@ -246,15 +291,81 @@ export const getSupabaseConfig = (): SupabaseConfigResult => {
   };
 };
 
+export type SupabaseConnectionState =
+  | 'connected'
+  | 'needs_schema'
+  | 'permission_error'
+  | 'auth_error'
+  | 'network_error'
+  | 'not_configured'
+  | 'unknown_error';
+
 export interface SupabaseConnectionStatus {
   isConfigured: boolean;
   connected: boolean;
-  state: 'connected' | 'needs_schema' | 'auth_error' | 'network_error' | 'not_configured';
+  state: SupabaseConnectionState;
+  gatewayConnected: boolean;
+  apiKeyValid: boolean;
+  databaseAccessible: boolean;
+  httpStatus: number | null;
+  errorCode: string | null;
   message: string;
+  testedAt: string;
   tablesCreated: boolean;
   url?: string;
   source?: SupabaseConfigResult['source'];
 }
+
+// Pembungkus fetch aman untuk SDK @supabase/supabase-js v2.119.0:
+// Mencegah sb_publishable_ terkirim sebagai Authorization: Bearer saat belum ada sesi JWT pengguna,
+// sambil menjaga Authorization: Bearer <user_jwt> milik sesi aktif dan perilaku JWT anon key lama.
+const createPublishableSafeFetch = (apiKey: string): typeof fetch => {
+  const isPublishable = isPublishableApiKey(apiKey);
+  return (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined)
+    );
+
+    if (!headers.has('apikey')) {
+      headers.set('apikey', apiKey);
+    }
+
+    if (isPublishable) {
+      const authHeader = headers.get('Authorization');
+      if (authHeader) {
+        const bearerMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+        if (bearerMatch && bearerMatch[1].trim() === apiKey) {
+          headers.delete('Authorization');
+        }
+      }
+    }
+
+    return globalThis.fetch(input, {
+      ...init,
+      headers,
+    });
+  };
+};
+
+// Pembentuk header REST manual yang aman untuk sb_publishable_ maupun JWT anon key
+export const buildSupabaseRestHeaders = (
+  apiKey: string,
+  accessToken?: string | null
+): Record<string, string> => {
+  const headers: Record<string, string> = {
+    apikey: apiKey,
+    Accept: 'application/json',
+  };
+
+  const cleanedToken = cleanCredentialString(accessToken);
+  if (cleanedToken && cleanedToken !== apiKey) {
+    headers.Authorization = `Bearer ${cleanedToken}`;
+  } else if (!isPublishableApiKey(apiKey)) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  return headers;
+};
 
 // Satu-satunya instance Supabase Client (Singleton) di seluruh browser context
 let singletonClient: SupabaseClient | null = null;
@@ -286,6 +397,9 @@ export const getSupabaseClient = (): SupabaseClient | null => {
         detectSessionInUrl: true,
         storageKey: SINGLETON_AUTH_STORAGE_KEY,
       },
+      global: {
+        fetch: createPublishableSafeFetch(key),
+      },
     });
     singletonCacheKey = cacheKey;
     return singletonClient;
@@ -297,100 +411,217 @@ export const getSupabaseClient = (): SupabaseClient | null => {
   }
 };
 
-function interpretRestError(
-  errorObj: { message?: string; code?: string; status?: number } | null,
+export interface RestErrorInput {
+  message?: string;
+  code?: string | null;
+  status?: number | null;
+  stage?: 'gateway' | 'database';
+  gatewayConnected?: boolean;
+  apiKeyValid?: boolean;
+}
+
+export function interpretRestError(
+  errorObj: RestErrorInput | null,
   url: string,
-  source: SupabaseConfigResult['source']
+  source: SupabaseConfigResult['source'],
+  testedAt = new Date().toISOString()
 ): SupabaseConnectionStatus {
   if (!errorObj) {
     return {
       isConfigured: true,
       connected: true,
       state: 'connected',
-      message: `Terhubung ke Supabase (${url}). Database dan tabel siap digunakan.`,
+      gatewayConnected: true,
+      apiKeyValid: true,
+      databaseAccessible: true,
+      httpStatus: 200,
+      errorCode: null,
+      message: 'Gateway, API Key, dan akses database berhasil.',
+      testedAt,
       tablesCreated: true,
       url,
       source,
     };
   }
 
-  const msg = String(errorObj.message || '');
+  const msg = String(errorObj.message || '').trim();
   const lower = msg.toLowerCase();
-  const code = String(errorObj.code || '');
-  const status = errorObj.status;
+  const code = errorObj.code ? String(errorObj.code).trim() : null;
+  const codeUpper = (code || '').toUpperCase();
+  const status = typeof errorObj.status === 'number' ? errorObj.status : null;
+  const stage = errorObj.stage || 'database';
 
-  if (
+  const isNetworkFailure =
     lower.includes('failed to fetch') ||
     lower.includes('networkerror') ||
     lower.includes('err_name_not_resolved') ||
     lower.includes('load failed') ||
-    lower.includes('fetch')
-  ) {
+    lower.includes('network request failed') ||
+    lower.includes('timeout') ||
+    lower.includes('aborted') ||
+    status === 502 ||
+    status === 503 ||
+    status === 504;
+
+  if (isNetworkFailure) {
     return {
       isConfigured: true,
       connected: false,
       state: 'network_error',
-      message: `Gagal menjangkau server Supabase (${url}). Periksa koneksi internet, pastikan project Supabase (${EXPECTED_SUPABASE_PROJECT_REF}) tidak dalam status Paused, dan pastikan deployment Vercel sudah di-redeploy.`,
+      gatewayConnected: false,
+      apiKeyValid: false,
+      databaseAccessible: false,
+      httpStatus: status,
+      errorCode: code || (status ? `HTTP_${status}` : 'NETWORK_ERROR'),
+      message: `Periksa jaringan, DNS, atau ketersediaan server Supabase (${url}).`,
+      testedAt,
       tablesCreated: false,
       url,
       source,
     };
   }
 
-  if (
-    status === 401 ||
-    status === 403 ||
+  const isApiKeyOrJwtRejection =
+    codeUpper === 'PGRST301' ||
+    codeUpper === 'UNAUTHORIZED_INVALID_API_KEY' ||
+    codeUpper === 'UNAUTHORIZED_MISSING_API_KEY' ||
     lower.includes('invalid api key') ||
-    lower.includes('apikey') ||
-    lower.includes('jwt') ||
+    lower.includes('no api key') ||
+    lower.includes('missing api key') ||
+    lower.includes('jwserror') ||
+    lower.includes('invalid jwt') ||
+    lower.includes('jwt expired') ||
+    lower.includes('expected 3 parts in jwt');
+
+  const isPermissionOrRlsError =
+    codeUpper === '42501' ||
+    lower.includes('permission denied') ||
+    lower.includes('row-level security') ||
+    lower.includes('insufficient privilege');
+
+  // 1. Cek skema / tabel belum tersedia (khusus tahap database, tidak menyamaratakan seluruh 404)
+  const isMissingTableError =
+    stage === 'database' &&
+    (codeUpper === '42P01' ||
+      codeUpper === 'PGRST205' ||
+      (status === 404 &&
+        (lower.includes('could not find the table') ||
+          lower.includes('does not exist') ||
+          lower.includes('relation') ||
+          lower.includes('schema cache') ||
+          lower.includes('profiles'))));
+
+  if (isMissingTableError) {
+    return {
+      isConfigured: true,
+      connected: false,
+      state: 'needs_schema',
+      gatewayConnected: true,
+      apiKeyValid: true,
+      databaseAccessible: false,
+      httpStatus: status ?? 404,
+      errorCode: code || 'PGRST205',
+      message: 'Gateway dan API Key berhasil, tetapi tabel profiles belum ditemukan.',
+      testedAt,
+      tablesCreated: false,
+      url,
+      source,
+    };
+  }
+
+  // 2. Cek penolakan izin database / RLS (42501 / 403 non-auth) sebelum menyimpulkan auth_error
+  if (
+    isPermissionOrRlsError ||
+    (stage === 'database' && status === 403 && !isApiKeyOrJwtRejection) ||
+    (stage === 'gateway' && status === 403 && !isApiKeyOrJwtRejection && !lower.includes('unauthorized'))
+  ) {
+    return {
+      isConfigured: true,
+      connected: false,
+      state: 'permission_error',
+      gatewayConnected: errorObj.gatewayConnected ?? true,
+      apiKeyValid: errorObj.apiKeyValid ?? true,
+      databaseAccessible: false,
+      httpStatus: status ?? 403,
+      errorCode: code || (status ? `HTTP_${status}` : '42501'),
+      message: 'API Key diterima, tetapi akses tabel profiles dibatasi oleh izin database atau RLS.',
+      testedAt,
+      tablesCreated: true,
+      url,
+      source,
+    };
+  }
+
+  // 3. Penolakan autentikasi / API Key / JWT (401, PGRST301, atau 403 terkait API Key)
+  if (
+    isApiKeyOrJwtRejection ||
+    status === 401 ||
+    (status === 403 && isApiKeyOrJwtRejection) ||
     lower.includes('unauthorized')
   ) {
     return {
       isConfigured: true,
       connected: false,
       state: 'auth_error',
-      message: 'API Key Supabase (VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY) tidak valid atau ditolak oleh server Supabase.',
+      gatewayConnected: errorObj.gatewayConnected ?? Boolean(status),
+      apiKeyValid: false,
+      databaseAccessible: false,
+      httpStatus: status ?? 401,
+      errorCode: code || (status ? `HTTP_${status}` : 'AUTH_ERROR'),
+      message:
+        codeUpper === 'PGRST301'
+          ? 'Token JWT atau header Bearer ditolak oleh PostgREST (PGRST301). Periksa API Key atau sesi autentikasi.'
+          : 'Periksa API Key atau token autentikasi. Server Supabase menolak kredensial yang digunakan.',
+      testedAt,
       tablesCreated: false,
       url,
       source,
     };
   }
 
-  if (
-    code === '42P01' ||
-    code === 'PGRST205' ||
-    status === 404 ||
-    lower.includes('does not exist') ||
-    lower.includes('could not find the table') ||
-    lower.includes('relation')
-  ) {
-    return {
-      isConfigured: true,
-      connected: false,
-      state: 'needs_schema',
-      message: 'Server Supabase merespons dan API Key valid, namun tabel "profiles" / "reports" belum tersedia di database.',
-      tablesCreated: false,
-      url,
-      source,
-    };
-  }
-
+  // 4. Kesalahan lain yang tidak termasuk kategori di atas (mis. 404 bukan tabel, 500, dsb.)
   return {
     isConfigured: true,
     connected: false,
-    state: 'network_error',
-    message: `Gagal terhubung ke Supabase: ${msg || 'Respon server tidak dikenali.'}`,
+    state: 'unknown_error',
+    gatewayConnected: errorObj.gatewayConnected ?? Boolean(status),
+    apiKeyValid: errorObj.apiKeyValid ?? false,
+    databaseAccessible: false,
+    httpStatus: status,
+    errorCode: code || (status ? `HTTP_${status}` : 'UNKNOWN_ERROR'),
+    message: msg || 'Terjadi kesalahan koneksi yang tidak dapat diklasifikasikan. Periksa informasi diagnostik.',
+    testedAt,
     tablesCreated: false,
     url,
     source,
   };
 }
 
-// Menguji koneksi nyata ke Supabase menggunakan singleton client (tanpa pernah membuat instance createClient baru)
+async function parseSafeErrorBody(response: Response): Promise<{ message?: string; code?: string | null }> {
+  try {
+    const text = await response.text();
+    if (!text) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return {
+        message: parsed?.message || parsed?.error_description || parsed?.hint || parsed?.error,
+        code: parsed?.code || parsed?.error_code || null,
+      };
+    } catch {
+      return { message: text.slice(0, 200) };
+    }
+  } catch {
+    return {};
+  }
+}
+
+// Menguji koneksi nyata ke Supabase dalam 2 tahap (Gateway+API Key -> Tabel+Izin Database)
+// Menggunakan metode GET saja dan hanya 1 singleton client.
 export const testSupabaseConnection = async (
   customUrl?: string,
   customKey?: string
 ): Promise<SupabaseConnectionStatus> => {
+  const testedAt = new Date().toISOString();
   const cfg = getSupabaseConfig();
   const rawCustomUrl = normalizeSupabaseUrl(customUrl);
   const rawCustomKey = cleanCredentialString(customKey);
@@ -398,15 +629,22 @@ export const testSupabaseConnection = async (
   const hasCustomInput = Boolean(rawCustomUrl || rawCustomKey);
   const targetUrl = hasCustomInput ? rawCustomUrl : cfg.url;
   const targetKey = hasCustomInput ? rawCustomKey : cfg.key;
+  const effectiveSource: SupabaseConfigResult['source'] = hasCustomInput ? 'localStorage' : cfg.source;
 
   if (!targetUrl || !targetKey) {
     return {
       isConfigured: false,
       connected: false,
       state: 'not_configured',
+      gatewayConnected: false,
+      apiKeyValid: false,
+      databaseAccessible: false,
+      httpStatus: null,
+      errorCode: 'NOT_CONFIGURED',
       message:
         cfg.envError ||
-        'Belum terhubung: VITE_SUPABASE_URL atau VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY belum diatur.',
+        'Belum terkonfigurasi: VITE_SUPABASE_URL atau VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY belum tersedia.',
+      testedAt,
       tablesCreated: false,
       source: cfg.source,
     };
@@ -418,10 +656,16 @@ export const testSupabaseConnection = async (
       isConfigured: false,
       connected: false,
       state: 'network_error',
+      gatewayConnected: false,
+      apiKeyValid: false,
+      databaseAccessible: false,
+      httpStatus: null,
+      errorCode: 'INVALID_URL',
       message: urlCheck.error || 'Format URL Supabase tidak valid.',
+      testedAt,
       tablesCreated: false,
       url: targetUrl,
-      source: cfg.source,
+      source: effectiveSource,
     };
   }
 
@@ -431,10 +675,16 @@ export const testSupabaseConnection = async (
       isConfigured: false,
       connected: false,
       state: 'auth_error',
+      gatewayConnected: false,
+      apiKeyValid: false,
+      databaseAccessible: false,
+      httpStatus: null,
+      errorCode: 'INVALID_KEY_FORMAT',
       message: keyCheck.error || 'Format API Key Supabase tidak valid.',
+      testedAt,
       tablesCreated: false,
       url: urlCheck.normalizedUrl,
-      source: cfg.source,
+      source: effectiveSource,
     };
   }
 
@@ -443,18 +693,56 @@ export const testSupabaseConnection = async (
     urlCheck.normalizedUrl === cfg.url &&
     targetKey === cfg.key;
 
+  const resolvedSource = matchesActiveConfig || !hasCustomInput ? cfg.source : 'localStorage';
+
   try {
+    // =========================================================================
+    // TAHAP 1: Pengujian Gateway & API Key (/rest/v1/)
+    // Untuk sb_publishable_, hanya mengirim header apikey (tanpa Bearer).
+    // =========================================================================
+    const gatewayHeaders = buildSupabaseRestHeaders(targetKey);
+    const gatewayResponse = await globalThis.fetch(`${urlCheck.normalizedUrl}/rest/v1/`, {
+      method: 'GET',
+      headers: gatewayHeaders,
+    });
+
+    if (!gatewayResponse.ok) {
+      const gatewayBody = await parseSafeErrorBody(gatewayResponse);
+      return interpretRestError(
+        {
+          message: gatewayBody.message || gatewayResponse.statusText || `HTTP ${gatewayResponse.status}`,
+          code: gatewayBody.code,
+          status: gatewayResponse.status,
+          stage: 'gateway',
+          gatewayConnected: gatewayResponse.status < 502,
+          apiKeyValid: false,
+        },
+        urlCheck.normalizedUrl,
+        resolvedSource,
+        testedAt
+      );
+    }
+
+    // =========================================================================
+    // TAHAP 2: Pengujian Tabel & Izin Database (/rest/v1/profiles?select=id&limit=1)
+    // =========================================================================
     if (matchesActiveConfig || !hasCustomInput) {
-      // Gunakan singleton client yang sama persis dengan seluruh aplikasi & Realtime
       const client = getSupabaseClient();
       if (!client) {
         return {
           isConfigured: false,
           connected: false,
-          state: 'not_configured',
-          message: 'Client Supabase gagal diinisialisasi. Periksa konfigurasi Environment Variables.',
+          state: 'unknown_error',
+          gatewayConnected: true,
+          apiKeyValid: true,
+          databaseAccessible: false,
+          httpStatus: null,
+          errorCode: 'CLIENT_INIT_FAILED',
+          message: 'Gateway & API Key aktif, namun singleton Supabase client gagal diinisialisasi.',
+          testedAt,
           tablesCreated: false,
-          source: cfg.source,
+          url: urlCheck.normalizedUrl,
+          source: resolvedSource,
         };
       }
 
@@ -463,47 +751,64 @@ export const testSupabaseConnection = async (
         .select('id')
         .limit(1);
 
+      if (!tableError) {
+        return interpretRestError(null, urlCheck.normalizedUrl, resolvedSource, testedAt);
+      }
+
       return interpretRestError(
-        tableError ? { message: tableError.message, code: tableError.code, status } : null,
+        {
+          message: tableError.message,
+          code: tableError.code,
+          status,
+          stage: 'database',
+          gatewayConnected: true,
+          apiKeyValid: true,
+        },
         urlCheck.normalizedUrl,
-        cfg.source
+        resolvedSource,
+        testedAt
       );
     }
 
-    // Jika Admin mengetes input sementara di form Pengaturan sebelum disimpan,
-    // gunakan fetch REST langsung agar TIDAK membuat instance GoTrueClient kedua.
-    const response = await fetch(`${urlCheck.normalizedUrl}/rest/v1/profiles?select=id&limit=1`, {
-      method: 'GET',
-      headers: {
-        apikey: targetKey,
-        Authorization: `Bearer ${targetKey}`,
-        Accept: 'application/json',
-      },
-    });
+    // Jika Admin menguji kredensial sementara di form Pengaturan sebelum disimpan,
+    // gunakan fetch REST read-only dengan header aman tanpa membuat createClient() kedua.
+    const dbResponse = await globalThis.fetch(
+      `${urlCheck.normalizedUrl}/rest/v1/profiles?select=id&limit=1`,
+      {
+        method: 'GET',
+        headers: buildSupabaseRestHeaders(targetKey),
+      }
+    );
 
-    if (response.ok) {
-      return interpretRestError(null, urlCheck.normalizedUrl, 'localStorage');
+    if (dbResponse.ok) {
+      return interpretRestError(null, urlCheck.normalizedUrl, 'localStorage', testedAt);
     }
 
-    let bodyErr: any = {};
-    try {
-      bodyErr = await response.json();
-    } catch {}
-
+    const dbBody = await parseSafeErrorBody(dbResponse);
     return interpretRestError(
       {
-        message: bodyErr?.message || response.statusText || `HTTP ${response.status}`,
-        code: bodyErr?.code,
-        status: response.status,
+        message: dbBody.message || dbResponse.statusText || `HTTP ${dbResponse.status}`,
+        code: dbBody.code,
+        status: dbResponse.status,
+        stage: 'database',
+        gatewayConnected: true,
+        apiKeyValid: true,
       },
       urlCheck.normalizedUrl,
-      'localStorage'
+      'localStorage',
+      testedAt
     );
   } catch (err: any) {
     return interpretRestError(
-      { message: err?.message || 'Failed to fetch' },
+      {
+        message: err?.message || 'Failed to fetch',
+        code: 'NETWORK_ERROR',
+        status: null,
+        stage: 'gateway',
+      },
       urlCheck.normalizedUrl,
-      cfg.source
+      resolvedSource,
+      testedAt
     );
   }
 };

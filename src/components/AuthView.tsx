@@ -269,18 +269,45 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
               )}
             </div>
 
-            <div className={`mt-2.5 flex items-center gap-2 text-[10.5px] px-3 py-1 rounded-full border ${
-              isSupabaseConnected
-                ? 'text-emerald-200 bg-black/25 border-white/10'
-                : 'text-rose-200 bg-rose-950/60 border-rose-400/30'
-            }`}>
-              <Database className={`w-3.5 h-3.5 shrink-0 ${isSupabaseConnected ? 'text-emerald-300' : 'text-rose-300'}`} />
-              <span className="truncate max-w-xs sm:max-w-md" title={supabaseStatus.message}>
-                {isSupabaseConnected
-                  ? 'Terhubung ke Supabase'
-                  : `Belum Terhubung — ${supabaseStatus.message}`}
-              </span>
-            </div>
+            {(() => {
+              const isOk = supabaseStatus.state === 'connected';
+              const isPartial =
+                supabaseStatus.state === 'needs_schema' ||
+                supabaseStatus.state === 'permission_error';
+              const pillLabel =
+                supabaseStatus.state === 'connected'
+                  ? 'Supabase Terhubung'
+                  : supabaseStatus.state === 'needs_schema'
+                  ? 'Supabase Terhubung - Skema Database Belum Siap'
+                  : supabaseStatus.state === 'permission_error'
+                  ? 'Supabase Terhubung - Izin Database Terbatas'
+                  : supabaseStatus.state === 'auth_error'
+                  ? 'Autentikasi Supabase Ditolak'
+                  : supabaseStatus.state === 'network_error'
+                  ? 'Tidak Dapat Menjangkau Supabase'
+                  : 'Terjadi Kesalahan Koneksi';
+
+              return (
+                <div
+                  className={`mt-2.5 flex items-center gap-2 text-[10.5px] px-3 py-1 rounded-full border ${
+                    isOk
+                      ? 'text-emerald-200 bg-black/25 border-white/10'
+                      : isPartial
+                      ? 'text-amber-200 bg-amber-950/60 border-amber-400/30'
+                      : 'text-rose-200 bg-rose-950/60 border-rose-400/30'
+                  }`}
+                >
+                  <Database
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      isOk ? 'text-emerald-300' : isPartial ? 'text-amber-300' : 'text-rose-300'
+                    }`}
+                  />
+                  <span className="truncate max-w-xs sm:max-w-md" title={supabaseStatus.message}>
+                    {pillLabel}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
         </div>
 

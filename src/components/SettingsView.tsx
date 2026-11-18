@@ -41,6 +41,7 @@ import {
   getSupabaseClient,
   getEnvSupabaseUrl,
   getEnvSupabaseKey,
+  SupabaseConnectionStatus,
 } from '../lib/supabase';
 import { FULL_SUPABASE_SCHEMA_SQL } from '../data/supabaseSchema';
 
@@ -128,7 +129,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [copiedUserPortalLink, setCopiedUserPortalLink] = useState(false);
   const [copiedAdminPortalLink, setCopiedAdminPortalLink] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const [testFeedback, setTestFeedback] = useState<any>(null);
+  const [testFeedback, setTestFeedback] = useState<SupabaseConnectionStatus | null>(null);
 
   // Modal State for Add User by Admin
   const [showAddUserModal, setShowAddUserModal] = useState(false);
@@ -499,12 +500,52 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
-            isSupabaseConnected ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800 border border-rose-300'
-          }`}>
-            <Database className="w-3.5 h-3.5" />
-            <span>{isSupabaseConnected ? 'Terhubung ke Supabase' : 'Belum Terhubung'}</span>
-          </span>
+          {(() => {
+            const activeStat = testFeedback || supabaseStatus;
+            const badgeConfig: Record<
+              SupabaseConnectionStatus['state'],
+              { label: string; cls: string }
+            > = {
+              connected: {
+                label: 'Supabase Terhubung',
+                cls: 'bg-emerald-100 text-emerald-800 border border-emerald-300',
+              },
+              needs_schema: {
+                label: 'Supabase Terhubung - Skema Database Belum Siap',
+                cls: 'bg-amber-100 text-amber-900 border border-amber-300',
+              },
+              permission_error: {
+                label: 'Supabase Terhubung - Izin Database Terbatas',
+                cls: 'bg-amber-100 text-amber-900 border border-amber-300',
+              },
+              auth_error: {
+                label: 'Autentikasi Supabase Ditolak',
+                cls: 'bg-rose-100 text-rose-800 border border-rose-300',
+              },
+              network_error: {
+                label: 'Tidak Dapat Menjangkau Supabase',
+                cls: 'bg-rose-100 text-rose-800 border border-rose-300',
+              },
+              unknown_error: {
+                label: 'Terjadi Kesalahan Koneksi',
+                cls: 'bg-rose-100 text-rose-800 border border-rose-300',
+              },
+              not_configured: {
+                label: 'Konfigurasi Supabase Belum Lengkap',
+                cls: 'bg-slate-100 text-slate-700 border border-slate-300',
+              },
+            };
+            const currentBadge = badgeConfig[activeStat.state] || badgeConfig.unknown_error;
+            return (
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${currentBadge.cls}`}
+                title={activeStat.message}
+              >
+                <Database className="w-3.5 h-3.5 shrink-0" />
+                <span>{currentBadge.label}</span>
+              </span>
+            );
+          })()}
         </div>
       </div>
 
@@ -1033,7 +1074,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Feedback Status Box */}
+            {/* Feedback Status Box & Diagnostik Lengkap */}
             {(() => {
               const currentStat = testFeedback || supabaseStatus;
               const sourceLabel =
@@ -1045,68 +1086,197 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ? 'Kombinasi Environment Variables & Browser'
                   : 'Belum Terkonfigurasi';
 
-              if (currentStat.state === 'connected') {
-                return (
-                  <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-2.5">
-                    <Check className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                    <div>
-                      <p className="font-bold">Terhubung ke Supabase</p>
-                      <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
-                        {currentStat.message}
-                      </p>
-                      <p className="text-[10.5px] text-emerald-700 mt-1 font-medium">
-                        Sumber Kredensial: {sourceLabel}
-                      </p>
-                    </div>
-                  </div>
-                );
-              }
+              const stateMeta: Record<
+                SupabaseConnectionStatus['state'],
+                {
+                  title: string;
+                  summary: string;
+                  boxCls: string;
+                  titleCls: string;
+                  subCls: string;
+                  badgeIcon: 'check' | 'warn' | 'error' | 'db';
+                }
+              > = {
+                connected: {
+                  title: 'Supabase Terhubung',
+                  summary: 'Gateway, API Key, dan akses database berhasil.',
+                  boxCls: 'bg-emerald-50 border-emerald-200 text-emerald-950',
+                  titleCls: 'text-emerald-950',
+                  subCls: 'text-emerald-800',
+                  badgeIcon: 'check',
+                },
+                needs_schema: {
+                  title: 'Supabase Terhubung - Skema Database Belum Siap',
+                  summary: 'Gateway dan API Key berhasil, tetapi tabel profiles belum ditemukan.',
+                  boxCls: 'bg-amber-50 border-amber-300 text-amber-950',
+                  titleCls: 'text-amber-950',
+                  subCls: 'text-amber-900',
+                  badgeIcon: 'warn',
+                },
+                permission_error: {
+                  title: 'Supabase Terhubung - Izin Database Terbatas',
+                  summary: 'API Key diterima, tetapi akses tabel profiles dibatasi oleh izin database atau RLS.',
+                  boxCls: 'bg-amber-50 border-amber-300 text-amber-950',
+                  titleCls: 'text-amber-950',
+                  subCls: 'text-amber-900',
+                  badgeIcon: 'warn',
+                },
+                auth_error: {
+                  title: 'Autentikasi Supabase Ditolak',
+                  summary: 'Periksa API Key atau token autentikasi.',
+                  boxCls: 'bg-rose-50 border-rose-200 text-rose-950',
+                  titleCls: 'text-rose-950',
+                  subCls: 'text-rose-800',
+                  badgeIcon: 'error',
+                },
+                network_error: {
+                  title: 'Tidak Dapat Menjangkau Supabase',
+                  summary: 'Periksa jaringan, DNS, atau ketersediaan server.',
+                  boxCls: 'bg-rose-50 border-rose-200 text-rose-950',
+                  titleCls: 'text-rose-950',
+                  subCls: 'text-rose-800',
+                  badgeIcon: 'error',
+                },
+                unknown_error: {
+                  title: 'Terjadi Kesalahan Koneksi',
+                  summary: 'Periksa informasi diagnostik.',
+                  boxCls: 'bg-rose-50/80 border-rose-200 text-rose-950',
+                  titleCls: 'text-rose-950',
+                  subCls: 'text-rose-800',
+                  badgeIcon: 'error',
+                },
+                not_configured: {
+                  title: 'Terjadi Kesalahan Koneksi',
+                  summary: 'Periksa informasi diagnostik.',
+                  boxCls: 'bg-slate-50 border-slate-200 text-slate-900',
+                  titleCls: 'text-slate-900',
+                  subCls: 'text-slate-700',
+                  badgeIcon: 'db',
+                },
+              };
 
-              if (currentStat.state === 'needs_schema') {
-                return (
-                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-950 flex items-start gap-2.5">
-                    <div className="w-4 h-4 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-bold mt-0.5 shrink-0">!</div>
-                    <div className="space-y-1">
-                      <p className="font-bold">Belum Terhubung — Skema Database Belum Siap</p>
-                      <p className="text-[11px] text-amber-900 leading-relaxed">
-                        {currentStat.message}
-                      </p>
-                      <p className="text-[11px] text-amber-800 font-medium">
-                        Klik tombol <strong>"Salin SQL Schema"</strong> di bawah, buka menu <strong>SQL Editor</strong> di dashboard Supabase Anda, tempel kodenya dan klik <strong>Run</strong>.
-                      </p>
-                    </div>
-                  </div>
-                );
-              }
+              const meta = stateMeta[currentStat.state] || stateMeta.unknown_error;
+              const formattedTestedAt = currentStat.testedAt
+                ? new Date(currentStat.testedAt).toLocaleString('id-ID')
+                : '—';
 
-              if (currentStat.state === 'auth_error' || currentStat.state === 'network_error') {
-                return (
-                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-950 flex items-start gap-2.5">
-                    <div className="w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] font-bold mt-0.5 shrink-0">×</div>
-                    <div>
-                      <p className="font-bold">Belum Terhubung ke Supabase</p>
-                      <p className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
-                        Alasan: {currentStat.message}
-                      </p>
-                      <p className="text-[10.5px] text-rose-700 mt-1">
-                        Pastikan Project URL adalah <code className="font-mono bg-white px-1 rounded border border-rose-200">{EXPECTED_SUPABASE_URL}</code> dan periksa Anon/Publishable Key pada <em>Project Settings &gt; API</em> atau Environment Variables Vercel.
-                      </p>
-                    </div>
-                  </div>
-                );
-              }
+              const dbStatusText = currentStat.databaseAccessible
+                ? 'Tersedia & Dapat Diakses'
+                : currentStat.state === 'needs_schema'
+                ? 'Tabel profiles Belum Tersedia'
+                : currentStat.state === 'permission_error'
+                ? 'Terbatas (RLS / Izin Database)'
+                : 'Tidak Dapat Diakses';
 
               return (
-                <div className="p-3.5 rounded-xl bg-rose-50/70 border border-rose-200 text-xs text-rose-950 flex items-start gap-2.5">
-                  <Database className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                  <div>
-                    <p className="font-bold">Belum Terhubung ke Supabase</p>
-                    <p className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
-                      Alasan: {currentStat.message}
-                    </p>
-                    <p className="text-[10.5px] text-slate-600 mt-1">
-                      Data laporan lokal di browser tetap aman. Atur <code className="font-mono">VITE_SUPABASE_URL</code> dan <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> / <code className="font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code> di Vercel Environment Variables (atau isi formulir di bawah untuk pengujian lokal).
-                    </p>
+                <div className={`p-4 rounded-xl border text-xs space-y-3 ${meta.boxCls}`}>
+                  <div className="flex items-start gap-2.5">
+                    {meta.badgeIcon === 'check' && (
+                      <Check className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                    )}
+                    {meta.badgeIcon === 'warn' && (
+                      <div className="w-4 h-4 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-bold mt-0.5 shrink-0">
+                        !
+                      </div>
+                    )}
+                    {meta.badgeIcon === 'error' && (
+                      <div className="w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] font-bold mt-0.5 shrink-0">
+                        ×
+                      </div>
+                    )}
+                    {meta.badgeIcon === 'db' && (
+                      <Database className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
+                    )}
+
+                    <div className="space-y-1 flex-1">
+                      <p className={`font-bold ${meta.titleCls}`}>{meta.title}</p>
+                      <p className={`text-[11px] font-medium ${meta.subCls}`}>{meta.summary}</p>
+                      <p className={`text-[11px] leading-relaxed ${meta.subCls}`}>
+                        Detail: {currentStat.message}
+                      </p>
+                      {currentStat.state === 'needs_schema' && (
+                        <p className="text-[11px] text-amber-800 font-medium pt-0.5">
+                          Klik tombol <strong>&quot;Salin SQL Schema&quot;</strong> di bawah, buka menu{' '}
+                          <strong>SQL Editor</strong> di dashboard Supabase Anda, tempel kodenya dan klik{' '}
+                          <strong>Run</strong>.
+                        </p>
+                      )}
+                      {currentStat.state === 'auth_error' && (
+                        <p className="text-[10.5px] text-rose-700 pt-0.5">
+                          Pastikan Project URL adalah{' '}
+                          <code className="font-mono bg-white px-1 rounded border border-rose-200">
+                            {EXPECTED_SUPABASE_URL}
+                          </code>{' '}
+                          dan periksa <code className="font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code> /{' '}
+                          <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> pada{' '}
+                          <em>Project Settings &gt; API</em> atau Environment Variables Vercel.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Panel Diagnostik Aman (Tanpa Kredensial Rahasia) */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2.5 border-t border-black/10 text-[11px]">
+                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
+                      <span className="block text-[10px] text-slate-500">Status Gateway</span>
+                      <span className={`font-semibold ${currentStat.gatewayConnected ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {currentStat.gatewayConnected ? 'Aktif / Terhubung' : 'Tidak Terhubung'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
+                      <span className="block text-[10px] text-slate-500">Status API Key</span>
+                      <span className={`font-semibold ${currentStat.apiKeyValid ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {currentStat.apiKeyValid
+                          ? 'Diterima Server'
+                          : currentStat.isConfigured
+                          ? 'Ditolak / Tidak Valid'
+                          : 'Belum Tersedia'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
+                      <span className="block text-[10px] text-slate-500">Status Akses Database</span>
+                      <span
+                        className={`font-semibold ${
+                          currentStat.databaseAccessible
+                            ? 'text-emerald-700'
+                            : currentStat.state === 'needs_schema' || currentStat.state === 'permission_error'
+                            ? 'text-amber-800'
+                            : 'text-rose-700'
+                        }`}
+                      >
+                        {dbStatusText}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
+                      <span className="block text-[10px] text-slate-500">HTTP Status Code</span>
+                      <span className="font-mono font-semibold text-slate-800">
+                        {currentStat.httpStatus ?? '—'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
+                      <span className="block text-[10px] text-slate-500">Error Code</span>
+                      <span className="font-mono font-semibold text-slate-800">
+                        {currentStat.errorCode || 'Tidak ada'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
+                      <span className="block text-[10px] text-slate-500">Waktu Pengujian</span>
+                      <span className="font-medium text-slate-800">{formattedTestedAt}</span>
+                    </div>
+                  </div>
+
+                  <div className="text-[10.5px] opacity-85 flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      Sumber Kredensial: <strong>{sourceLabel}</strong>
+                    </span>
+                    {currentStat.url && (
+                      <span className="font-mono">Endpoint: {currentStat.url}</span>
+                    )}
                   </div>
                 </div>
               );
