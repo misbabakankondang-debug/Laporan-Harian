@@ -179,27 +179,34 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- --- A. KEBIJAKAN RLS PROFILES ---
+DROP POLICY IF EXISTS "Profiles SELECT" ON public.profiles;
 CREATE POLICY "Profiles SELECT"
     ON public.profiles FOR SELECT
     USING (auth.uid() = id OR public.is_kepala_sekolah() OR public.is_admin());
 
+DROP POLICY IF EXISTS "Profiles UPDATE" ON public.profiles;
 CREATE POLICY "Profiles UPDATE"
     ON public.profiles FOR UPDATE
-    USING (auth.uid() = id OR public.is_admin());
+    USING (auth.uid() = id OR public.is_admin())
+    WITH CHECK (auth.uid() = id OR public.is_admin());
 
+DROP POLICY IF EXISTS "Profiles INSERT by Admin or Self" ON public.profiles;
 CREATE POLICY "Profiles INSERT by Admin or Self"
     ON public.profiles FOR INSERT
     WITH CHECK (auth.uid() = id OR public.is_admin());
 
+DROP POLICY IF EXISTS "Profiles DELETE by Admin" ON public.profiles;
 CREATE POLICY "Profiles DELETE by Admin"
     ON public.profiles FOR DELETE
     USING (public.is_admin());
 
--- Mencegah non-admin mengubah role atau status aktif sendiri
+-- Mencegah non-admin mengubah role atau status aktif sendiri (tetap izinkan Admin & service_role)
 CREATE OR REPLACE FUNCTION public.protect_profile_fields()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF NOT public.is_admin() THEN
+    IF current_user NOT IN ('postgres', 'supabase_admin', 'service_role')
+       AND COALESCE(auth.role(), '') <> 'service_role'
+       AND NOT public.is_admin() THEN
         NEW.role := OLD.role;
         NEW.is_active := OLD.is_active;
         NEW.email := OLD.email;

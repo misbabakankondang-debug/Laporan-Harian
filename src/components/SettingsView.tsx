@@ -38,7 +38,6 @@ import {
   isValidSupabaseKey,
   cleanCredentialString,
   getSupabaseConfig,
-  getSupabaseClient,
   getEnvSupabaseUrl,
   getEnvSupabaseKey,
   SupabaseConnectionStatus,
@@ -140,6 +139,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [newUserNip, setNewUserNip] = useState('');
   const [newUserPhone, setNewUserPhone] = useState('');
   const [newUserDepartment, setNewUserDepartment] = useState('Sekolah Rakyat Terintegerasi 1 Sumedang');
+  const [newUserPassword, setNewUserPassword] = useState('Sibahar2026!');
+  const [isSavingNewUser, setIsSavingNewUser] = useState(false);
   const [addUserError, setAddUserError] = useState('');
 
   // Modal State for Edit User by Admin
@@ -149,10 +150,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [editNip, setEditNip] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editDepartment, setEditDepartment] = useState('');
+  const [isUpdatingUser, setIsUpdatingUser] = useState(false);
+  const [editUserError, setEditUserError] = useState('');
 
   // Modal State for Delete User Confirmation
   const [deletingUser, setDeletingUser] = useState<UserProfile | null>(null);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [deleteUserError, setDeleteUserError] = useState('');
+  const [userMgmtSuccessMsg, setUserMgmtSuccessMsg] = useState('');
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
 
   // User Profile Photo State
@@ -374,57 +379,88 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setNewUserNip('');
     setNewUserPhone('');
     setNewUserDepartment('Sekolah Rakyat Terintegerasi 1 Sumedang');
+    setNewUserPassword('Sibahar2026!');
     setAddUserError('');
     setShowAddUserModal(true);
   };
 
-  const handleSaveNewUser = (e: React.FormEvent) => {
+  const handleSaveNewUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingNewUser) return;
     if (!newUserName.trim() || !newUserEmail.trim()) {
       setAddUserError('Nama lengkap dan alamat email wajib diisi.');
       return;
     }
 
-    addNewUserByAdmin({
-      name: newUserName.trim(),
-      email: newUserEmail.trim(),
-      roleKey: newUserRole,
-      nip: newUserNip.trim(),
-      phone: newUserPhone.trim(),
-      department: newUserDepartment.trim(),
-    });
+    setAddUserError('');
+    setIsSavingNewUser(true);
+    try {
+      const res = await addNewUserByAdmin({
+        name: newUserName.trim(),
+        email: newUserEmail.trim(),
+        roleKey: newUserRole,
+        nip: newUserNip.trim(),
+        phone: newUserPhone.trim(),
+        department: newUserDepartment.trim(),
+        defaultPassword: newUserPassword.trim() || 'Sibahar2026!',
+      });
 
-    setShowAddUserModal(false);
+      if (!res.success) {
+        setAddUserError(res.error || 'Gagal menyimpan pengguna baru ke Supabase.');
+        return;
+      }
+
+      setShowAddUserModal(false);
+      setUserMgmtSuccessMsg(`Pengguna "${res.user?.name || newUserName.trim()}" berhasil disimpan.`);
+      setTimeout(() => setUserMgmtSuccessMsg(''), 4000);
+    } finally {
+      setIsSavingNewUser(false);
+    }
   };
 
   const handleOpenEditUser = (user: UserProfile) => {
     setEditingUser(user);
     setEditName(user.name);
-    setEditRole(user.roleKey);
+    setEditRole(user.roleKey === 'keamanan' ? 'tenaga_keamanan' : user.roleKey);
     setEditNip(user.nip || '');
     setEditPhone(user.phone || '');
     setEditDepartment(user.department || 'Sekolah Rakyat Terintegerasi 1 Sumedang');
+    setEditUserError('');
   };
 
-  const handleSaveEditUser = (e: React.FormEvent) => {
+  const handleSaveEditUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingUser) return;
+    if (!editingUser || isUpdatingUser) return;
     if (!editName.trim()) {
-      alert('Nama pengguna wajib diisi.');
+      setEditUserError('Nama pengguna wajib diisi.');
       return;
     }
 
-    const targetId = editingUser.id || editingUser.email;
-    updateUserByAdmin(targetId, {
-      name: editName.trim(),
-      roleKey: editRole,
-      role: USER_ROLES[editRole]?.label || editRole,
-      nip: editNip.trim(),
-      phone: editPhone.trim(),
-      department: editDepartment.trim(),
-    });
+    setEditUserError('');
+    setIsUpdatingUser(true);
+    try {
+      const targetId = editingUser.id || editingUser.email;
+      const normalizedEditRole: UserRole = editRole === 'keamanan' ? 'tenaga_keamanan' : editRole;
+      const res = await updateUserByAdmin(targetId, {
+        name: editName.trim(),
+        roleKey: normalizedEditRole,
+        role: USER_ROLES[normalizedEditRole]?.label || normalizedEditRole,
+        nip: editNip.trim(),
+        phone: editPhone.trim(),
+        department: editDepartment.trim(),
+      });
 
-    setEditingUser(null);
+      if (!res.success) {
+        setEditUserError(res.error || 'Gagal memperbarui data pengguna di Supabase.');
+        return;
+      }
+
+      setEditingUser(null);
+      setUserMgmtSuccessMsg(`Perubahan data "${editName.trim()}" berhasil disimpan.`);
+      setTimeout(() => setUserMgmtSuccessMsg(''), 4000);
+    } finally {
+      setIsUpdatingUser(false);
+    }
   };
 
   const handleConfirmDeleteUser = async () => {
@@ -437,52 +473,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       '';
 
     if (!targetDeleteId) {
-      alert('Gagal menghapus: ID atau Email pengguna tidak ditemukan.');
+      setDeleteUserError('Gagal menghapus: ID atau Email pengguna tidak ditemukan.');
       return;
     }
 
+    setDeleteUserError('');
     setIsDeletingUser(true);
     try {
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      let rpcTargetId = uuidRegex.test(targetDeleteId) ? targetDeleteId : '';
-
-      const client = getSupabaseClient();
-      if (client) {
-        if (!rpcTargetId && deletingUser.email) {
-          try {
-            const { data: profileRow } = await client
-              .from('profiles')
-              .select('id')
-              .eq('email', deletingUser.email.toLowerCase())
-              .maybeSingle();
-            if (profileRow?.id) {
-              rpcTargetId = profileRow.id;
-            }
-          } catch {}
-        }
-
-        // Memanggil fungsi RPC Supabase di sisi server database (menghapus public.profiles & auth.users)
-        try {
-          const { data: rpcData, error } = await client.rpc('delete_user_profile', {
-            target_id: rpcTargetId || deletingUser.email || targetDeleteId,
-          });
-
-          if (error) {
-            console.warn('Supabase RPC delete_user_profile warning:', error.message);
-          } else if (rpcData && (rpcData as any).success === false) {
-            console.warn('Supabase RPC delete_user_profile:', (rpcData as any).error);
-          }
-        } catch (rpcErr: any) {
-          console.warn('Gagal memanggil RPC delete_user_profile:', rpcErr);
-        }
-      }
-
-      // Hapus dari state lokal & sinkron tabel profiles Supabase
+      const deletedName = deletingUser.name;
       const res = await deleteUserByAdmin(targetDeleteId);
       if (!res.success) {
-        alert(res.error || 'Gagal menghapus pengguna.');
+        setDeleteUserError(res.error || 'Gagal menghapus pengguna dari Supabase.');
+        return;
       }
       setDeletingUser(null);
+      setUserMgmtSuccessMsg(`Pengguna "${deletedName}" berhasil dihapus.`);
+      setTimeout(() => setUserMgmtSuccessMsg(''), 4000);
     } finally {
       setIsDeletingUser(false);
     }
@@ -1488,12 +1494,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
 
+            {userMgmtSuccessMsg && (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs flex items-center gap-2 font-medium">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{userMgmtSuccessMsg}</span>
+              </div>
+            )}
+
             {/* List Pengguna Aktif */}
             <div className="divide-y divide-slate-100 overflow-x-auto text-xs">
               <div className="min-w-[600px] space-y-1">
                 {allUsersList.map((u) => {
                   const roleInfo = USER_ROLES[u.roleKey] || { label: u.role, badgeClass: 'bg-slate-100 text-slate-700' };
-                  const isCurrentAdmin = u.id === userProfile.id;
+                  const isCurrentAdmin =
+                    (Boolean(userProfile.id) && u.id === userProfile.id) ||
+                    u.email.toLowerCase() === userProfile.email.toLowerCase();
 
                   return (
                     <div 
@@ -1538,7 +1553,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         {/* Tombol Hapus */}
                         <button
                           type="button"
-                          onClick={() => setDeletingUser(u)}
+                          onClick={() => {
+                            setDeleteUserError('');
+                            setDeletingUser(u);
+                          }}
                           disabled={isCurrentAdmin && allUsersList.filter(x => x.roleKey === 'admin').length <= 1}
                           className="px-2.5 py-1 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 rounded-lg text-xs font-medium flex items-center gap-1 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           title={isCurrentAdmin ? "Tidak dapat menghapus admin utama" : "Hapus akun pengguna"}
@@ -1746,7 +1764,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <option value="wali_asrama">1. Wali Asrama</option>
                     <option value="wali_asuh">2. Wali Asuh</option>
                     <option value="guru">3. Guru</option>
-                    <option value="keamanan">4. Tenaga Keamanan</option>
+                    <option value="tenaga_keamanan">4. Tenaga Keamanan</option>
                     <option value="kepala_sekolah">5. Kepala Sekolah</option>
                     <option value="admin">6. Admin</option>
                   </select>
@@ -1795,31 +1813,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-700 font-medium mb-1">
-                  Unit Kerja / Instansi
-                </label>
-                <input
-                  type="text"
-                  value={newUserDepartment}
-                  onChange={(e) => setNewUserDepartment(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-purple-500 text-xs"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">
+                    Unit Kerja / Instansi
+                  </label>
+                  <input
+                    type="text"
+                    value={newUserDepartment}
+                    onChange={(e) => setNewUserDepartment(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-purple-500 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">
+                    Kata Sandi Awal (Min. 6 Karakter)
+                  </label>
+                  <input
+                    type="text"
+                    minLength={6}
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    placeholder="Sibahar2026!"
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-purple-500 font-mono text-xs"
+                  />
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSavingNewUser}
                   onClick={() => setShowAddUserModal(false)}
-                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition"
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition disabled:opacity-50"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold transition shadow-xs"
+                  disabled={isSavingNewUser}
+                  className="px-5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-xs"
                 >
-                  Simpan Pengguna Baru
+                  {isSavingNewUser ? 'Menyimpan ke Supabase...' : 'Simpan Pengguna Baru'}
                 </button>
               </div>
             </form>
@@ -1849,6 +1885,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveEditUser} className="p-5 space-y-4 text-xs">
+              {editUserError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs">
+                  {editUserError}
+                </div>
+              )}
+
               <div>
                 <label className="block text-slate-700 font-medium mb-1">
                   Nama Lengkap &amp; Gelar Pengguna <span className="text-rose-500">*</span>
@@ -1875,7 +1917,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <option value="wali_asrama">1. Wali Asrama</option>
                     <option value="wali_asuh">2. Wali Asuh</option>
                     <option value="guru">3. Guru</option>
-                    <option value="keamanan">4. Tenaga Keamanan</option>
+                    <option value="tenaga_keamanan">4. Tenaga Keamanan</option>
                     <option value="kepala_sekolah">5. Kepala Sekolah</option>
                     <option value="admin">6. Admin</option>
                   </select>
@@ -1923,16 +1965,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isUpdatingUser}
                   onClick={() => setEditingUser(null)}
-                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition"
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition disabled:opacity-50"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold transition shadow-xs"
+                  disabled={isUpdatingUser}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-xs"
                 >
-                  Simpan Perubahan
+                  {isUpdatingUser ? 'Menyimpan...' : 'Simpan Perubahan'}
                 </button>
               </div>
             </form>
@@ -1957,6 +2001,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 Pengguna ini tidak akan bisa login lagi ke aplikasi.
               </p>
             </div>
+
+            {deleteUserError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs text-left">
+                {deleteUserError}
+              </div>
+            )}
 
             <div className="flex items-center gap-2 pt-2">
               <button

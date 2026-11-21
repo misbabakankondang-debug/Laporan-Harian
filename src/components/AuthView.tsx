@@ -54,24 +54,20 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
     }
   });
 
-  // Filter out admin from general user lists and ensure exactly ONE Tenaga Keamanan
+  // Filter out admin from general user lists; preserve every unique operational user (even with shared roles)
   const operationalUsers = useMemo<UserProfile[]>(() => {
     const list = allUsersList.filter((u: UserProfile) => u.roleKey !== 'admin');
     const result: UserProfile[] = [];
-    const seenRoles = new Set<string>();
-    const seenEmails = new Set<string>();
+    const seenKeys = new Set<string>();
 
     list.forEach((u: UserProfile) => {
-      // Tenaga Keamanan hanya satu saja
-      if (u.roleKey === 'tenaga_keamanan' || (u.roleKey as string) === 'keamanan') {
-        if (seenRoles.has('tenaga_keamanan')) return;
-        seenRoles.add('tenaga_keamanan');
-      }
-      const email = u.email.toLowerCase();
-      if (!seenEmails.has(email)) {
-        seenEmails.add(email);
-        result.push(u);
-      }
+      const uniqueKey = (u.id || u.email || '').trim().toLowerCase();
+      const emailKey = (u.email || '').trim().toLowerCase();
+      if (!uniqueKey) return;
+      if (seenKeys.has(uniqueKey) || (emailKey && seenKeys.has(emailKey))) return;
+      seenKeys.add(uniqueKey);
+      if (emailKey) seenKeys.add(emailKey);
+      result.push(u);
     });
     return result;
   }, [allUsersList]);
@@ -153,19 +149,20 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
     }
   };
 
-  // 1. Submit Login dengan Nama, NIP, dan Jabatan (Termasuk Kepala Sekolah)
+  // 1. Submit Login dengan Nama, NIP, dan Jabatan (Prioritas pencocokan ID unik -> Nama -> NIP -> Role)
   const handleStaffFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
-    // Cari user yang cocok berdasarkan id, email, nama, atau roleKey
-    const matchedUser = allUsersList.find(
-      (u) => 
-        (u.id && u.id === selectedStaffId) ||
-        (u.name.toLowerCase() === staffName.trim().toLowerCase()) ||
-        (u.nip && staffNip && u.nip.replace(/\s+/g, '') === staffNip.replace(/\s+/g, '')) ||
-        (u.roleKey === staffRoleKey)
-    ) || DEFAULT_ROLE_USERS[staffRoleKey];
+    const trimmedName = staffName.trim().toLowerCase();
+    const cleanedNip = staffNip.replace(/\s+/g, '');
+
+    const matchedUser =
+      allUsersList.find((u) => (u.id && u.id === selectedStaffId) || u.email === selectedStaffId) ||
+      allUsersList.find((u) => trimmedName && u.name.trim().toLowerCase() === trimmedName) ||
+      allUsersList.find((u) => cleanedNip && u.nip && u.nip.replace(/\s+/g, '') === cleanedNip) ||
+      allUsersList.find((u) => u.roleKey === staffRoleKey) ||
+      DEFAULT_ROLE_USERS[staffRoleKey];
 
     if (matchedUser) {
       loginWithUserProfile(matchedUser);
