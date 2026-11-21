@@ -1233,9 +1233,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {/* Panel Diagnostik Aman (Tanpa Kredensial Rahasia) */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2.5 border-t border-black/10 text-[11px]">
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Status Gateway</span>
-                      <span className={`font-semibold ${currentStat.gatewayConnected ? 'text-emerald-700' : 'text-rose-700'}`}>
-                        {currentStat.gatewayConnected ? 'Aktif / Terhubung' : 'Tidak Terhubung'}
+                      <span className="block text-[10px] text-slate-500">Status Gateway (Auth Health)</span>
+                      <span className={`font-semibold ${currentStat.gatewayReachable ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {currentStat.gatewayReachable ? 'Aktif / Terhubung' : 'Tidak Terhubung'}
+                        {currentStat.gatewayHttpStatus !== null ? ` (HTTP ${currentStat.gatewayHttpStatus})` : ''}
                       </span>
                     </div>
 
@@ -1243,25 +1244,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <span className="block text-[10px] text-slate-500">Status API Key</span>
                       <span
                         className={`font-semibold ${
-                          currentStat.apiKeyValid
+                          currentStat.apiKeyAccepted
                             ? 'text-emerald-700'
                             : currentStat.apiKeyFormatValid
                             ? 'text-amber-700'
                             : 'text-rose-700'
                         }`}
                       >
-                        {currentStat.apiKeyValid
+                        {currentStat.apiKeyAccepted
                           ? 'Diterima Server'
                           : !currentStat.apiKeyPresent && currentStat.errorCode !== 'INVALID_KEY_FORMAT'
                           ? 'Belum Tersedia'
                           : currentStat.apiKeyFormatValid
-                          ? 'Format Valid (Belum Diuji)'
+                          ? 'Format Valid (Belum Diterima)'
                           : 'Ditolak / Tidak Valid'}
                       </span>
                     </div>
 
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Status Akses Database</span>
+                      <span className="block text-[10px] text-slate-500">Status Akses Database (profiles)</span>
                       <span
                         className={`font-semibold ${
                           currentStat.databaseAccessible
@@ -1272,20 +1273,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         }`}
                       >
                         {dbStatusText}
+                        {currentStat.databaseHttpStatus !== null ? ` (HTTP ${currentStat.databaseHttpStatus})` : ''}
                       </span>
                     </div>
 
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">HTTP Status Code</span>
+                      <span className="block text-[10px] text-slate-500">HTTP Status (Gateway / DB)</span>
                       <span className="font-mono font-semibold text-slate-800">
-                        {currentStat.httpStatus ?? '—'}
+                        {currentStat.gatewayHttpStatus !== null || currentStat.databaseHttpStatus !== null
+                          ? `${currentStat.gatewayHttpStatus ?? '—'} / ${currentStat.databaseHttpStatus ?? '—'}`
+                          : currentStat.httpStatus ?? '—'}
                       </span>
                     </div>
 
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Error Code</span>
+                      <span className="block text-[10px] text-slate-500">Error Code / Tahap Gagal</span>
                       <span className="font-mono font-semibold text-slate-800">
                         {currentStat.errorCode || 'Tidak ada'}
+                        {currentStat.failedStage ? ` (${currentStat.failedStage})` : ''}
                       </span>
                     </div>
 
@@ -1294,6 +1299,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <span className="font-medium text-slate-800">{formattedTestedAt}</span>
                     </div>
                   </div>
+
+                  {!currentStat.connected &&
+                    currentStat.diagnosticDetails &&
+                    (currentStat.diagnosticDetails.sbErrorCode ||
+                      currentStat.diagnosticDetails.code ||
+                      currentStat.diagnosticDetails.hint ||
+                      currentStat.diagnosticDetails.details) && (
+                      <div className="bg-white/80 rounded-lg px-3 py-2 border border-black/10 text-[10.5px] space-y-0.5 text-slate-700">
+                        <p className="font-semibold text-slate-800">Respons Diagnostik Server (Disanitasi):</p>
+                        {currentStat.diagnosticDetails.sbErrorCode && (
+                          <p>
+                            <span className="font-medium">sb-error-code:</span>{' '}
+                            <code className="font-mono">{currentStat.diagnosticDetails.sbErrorCode}</code>
+                          </p>
+                        )}
+                        {currentStat.diagnosticDetails.code && (
+                          <p>
+                            <span className="font-medium">code:</span>{' '}
+                            <code className="font-mono">{currentStat.diagnosticDetails.code}</code>
+                          </p>
+                        )}
+                        {currentStat.diagnosticDetails.details && (
+                          <p>
+                            <span className="font-medium">details:</span> {currentStat.diagnosticDetails.details}
+                          </p>
+                        )}
+                        {currentStat.diagnosticDetails.hint && (
+                          <p>
+                            <span className="font-medium">hint:</span> {currentStat.diagnosticDetails.hint}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                   <div className="text-[10.5px] opacity-85 flex flex-wrap items-center justify-between gap-2">
                     <span>

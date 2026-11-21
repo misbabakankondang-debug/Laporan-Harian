@@ -39,11 +39,11 @@ export const getEnvSupabaseUrl = (): string => {
   return normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
 };
 
-// Membaca dan memvalidasi kandidat API Key dari Environment Variables (anon key JWT maupun sb_publishable_)
+// Membaca dan memvalidasi kandidat API Key dari Environment Variables (prioritas sb_publishable_, lalu anon key JWT)
 export const getEnvSupabaseKey = (): string => {
   const candidates = [
-    cleanCredentialString(import.meta.env.VITE_SUPABASE_ANON_KEY),
     cleanCredentialString(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY),
+    cleanCredentialString(import.meta.env.VITE_SUPABASE_ANON_KEY),
   ];
 
   for (const candidate of candidates) {
@@ -370,7 +370,7 @@ export const getSupabaseConfig = (): SupabaseConfigResult => {
     envError =
       'API Key Supabase (VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY) belum tersedia di Environment Variables Vercel.';
   } else if (hasAnyEnvKeyRaw && !envKeyCheck.valid) {
-    const failedCandidate = envAnonRaw || envPubRaw;
+    const failedCandidate = envPubRaw || envAnonRaw;
     const failedCheck = validateSupabaseKeyDetail(failedCandidate);
     envError = `VITE_SUPABASE_PUBLISHABLE_KEY / ANON_KEY: ${failedCheck.error}`;
   }
@@ -421,17 +421,34 @@ export type SupabaseConnectionState =
   | 'not_configured'
   | 'unknown_error';
 
+export interface SupabaseDiagnosticDetails {
+  message?: string | null;
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
+  httpStatus?: number | null;
+  sbErrorCode?: string | null;
+}
+
 export interface SupabaseConnectionStatus {
   isConfigured: boolean;
   connected: boolean;
   state: SupabaseConnectionState;
   gatewayConnected: boolean;
+  gatewayReachable: boolean;
   apiKeyValid: boolean;
+  apiKeyAccepted: boolean;
   apiKeyPresent?: boolean;
   apiKeyFormatValid?: boolean;
   databaseAccessible: boolean;
   httpStatus: number | null;
   errorCode: string | null;
+  gatewayHttpStatus: number | null;
+  databaseHttpStatus: number | null;
+  gatewayErrorCode: string | null;
+  databaseErrorCode: string | null;
+  failedStage: 'config' | 'gateway' | 'database' | null;
+  diagnosticDetails?: SupabaseDiagnosticDetails | null;
   message: string;
   testedAt: string;
   tablesCreated: boolean;
@@ -536,12 +553,27 @@ export const getSupabaseClient = (): SupabaseClient | null => {
 };
 
 export interface RestErrorInput {
-  message?: string;
+  message?: string | null;
   code?: string | null;
+  details?: string | null;
+  hint?: string | null;
+  sbErrorCode?: string | null;
   status?: number | null;
   stage?: 'gateway' | 'database';
   gatewayConnected?: boolean;
+  gatewayHttpStatus?: number | null;
+  gatewayErrorCode?: string | null;
   apiKeyValid?: boolean;
+}
+
+function sanitizeDiagnosticText(val: unknown): string | null {
+  if (typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  if (!trimmed) return null;
+  // Jangan pernah menyimpan token/key ke objek diagnostik
+  return trimmed
+    .replace(/sb_(publishable|secret)_[A-Za-z0-9_-]+/gi, '[REDACTED_API_KEY]')
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED_JWT]');
 }
 
 export function interpretRestError(
@@ -556,10 +588,25 @@ export function interpretRestError(
       connected: true,
       state: 'connected',
       gatewayConnected: true,
+      gatewayReachable: true,
       apiKeyValid: true,
+      apiKeyAccepted: true,
       databaseAccessible: true,
       httpStatus: 200,
       errorCode: null,
+      gatewayHttpStatus: 200,
+      databaseHttpStatus: 200,
+      gatewayErrorCode: null,
+      databaseErrorCode: null,
+      failedStage: null,
+      diagnosticDetails: {
+        message: 'Gateway Auth Health dan endpoint database merespons HTTP 200.',
+        code: null,
+        details: null,
+        hint: null,
+        httpStatus: 200,
+        sbErrorCode: null,
+      },
       message: 'Gateway, API Key, dan akses database berhasil.',
       testedAt,
       tablesCreated: true,
@@ -568,12 +615,33 @@ export function interpretRestError(
     };
   }
 
-  const msg = String(errorObj.message || '').trim();
-  const lower = msg.toLowerCase();
-  const code = errorObj.code ? String(errorObj.code).trim() : null;
+  const msg = sanitizeDiagnosticText(errorObj.message) || '';
+  const details = sanitizeDiagnosticText(errorObj.details);
+  const hint = sanitizeDiagnosticText(errorObj.hint);
+  const sbErrorCode = sanitizeDiagnosticText(errorObj.sbErrorCode);
+  const rawCode = sanitizeDiagnosticText(errorObj.code);
+  const lower = `${msg} ${details || ''} ${hint || ''}`.toLowerCase();
+  const code = sbErrorCode || rawCode || null;
   const codeUpper = (code || '').toUpperCase();
+  const rawCodeUpper = (rawCode || '').toUpperCase();
+  const sbUpper = (sbErrorCode || '').toUpperCase();
   const status = typeof errorObj.status === 'number' ? errorObj.status : null;
   const stage = errorObj.stage || 'database';
+
+  const gatewayHttpStatus =
+    stage === 'gateway' ? status : errorObj.gatewayHttpStatus ?? (errorObj.gatewayConnected ? 200 : null);
+  const databaseHttpStatus = stage === 'database' ? status : null;
+  const gatewayErrorCode =
+    stage === 'gateway' ? code || (status ? `HTTP_${status}` : 'GATEWAY_ERROR') : errorObj.gatewayErrorCode ?? null;
+
+  const diagnosticDetails: SupabaseDiagnosticDetails = {
+    message: msg || null,
+    code: rawCode,
+    details,
+    hint,
+    httpStatus: status,
+    sbErrorCode,
+  };
 
   const isNetworkFailure =
     lower.includes('failed to fetch') ||
@@ -588,15 +656,24 @@ export function interpretRestError(
     status === 504;
 
   if (isNetworkFailure) {
+    const errCode = code || (status ? `HTTP_${status}` : 'NETWORK_ERROR');
     return {
       isConfigured: true,
       connected: false,
       state: 'network_error',
       gatewayConnected: false,
+      gatewayReachable: false,
       apiKeyValid: false,
+      apiKeyAccepted: false,
       databaseAccessible: false,
       httpStatus: status,
-      errorCode: code || (status ? `HTTP_${status}` : 'NETWORK_ERROR'),
+      errorCode: errCode,
+      gatewayHttpStatus,
+      databaseHttpStatus,
+      gatewayErrorCode: stage === 'gateway' ? errCode : gatewayErrorCode,
+      databaseErrorCode: stage === 'database' ? errCode : null,
+      failedStage: stage,
+      diagnosticDetails,
       message: `Periksa jaringan, DNS, atau ketersediaan server Supabase (${url}).`,
       testedAt,
       tablesCreated: false,
@@ -605,29 +682,41 @@ export function interpretRestError(
     };
   }
 
-  const isApiKeyOrJwtRejection =
-    codeUpper === 'PGRST301' ||
-    codeUpper === 'UNAUTHORIZED_INVALID_API_KEY' ||
-    codeUpper === 'UNAUTHORIZED_MISSING_API_KEY' ||
+  const isInvalidApiKey =
+    sbUpper === 'UNAUTHORIZED_INVALID_API_KEY' ||
+    sbUpper === 'UNAUTHORIZED_MISSING_API_KEY' ||
+    rawCodeUpper === 'UNAUTHORIZED_INVALID_API_KEY' ||
+    rawCodeUpper === 'UNAUTHORIZED_MISSING_API_KEY' ||
     lower.includes('invalid api key') ||
-    lower.includes('no api key') ||
-    lower.includes('missing api key') ||
+    lower.includes('no api key found') ||
+    lower.includes('missing api key');
+
+  const isInvalidJwt =
+    rawCodeUpper === 'PGRST301' ||
+    sbUpper === 'PGRST301' ||
     lower.includes('jwserror') ||
     lower.includes('invalid jwt') ||
     lower.includes('jwt expired') ||
     lower.includes('expected 3 parts in jwt');
 
+  const isMissingCredentials =
+    sbUpper === 'UNAUTHORIZED_MISSING_API_KEY' ||
+    lower.includes('no api key found') ||
+    lower.includes('missing credentials') ||
+    lower.includes('missing authorization');
+
   const isPermissionOrRlsError =
-    codeUpper === '42501' ||
+    rawCodeUpper === '42501' ||
+    sbUpper === '42501' ||
     lower.includes('permission denied') ||
     lower.includes('row-level security') ||
     lower.includes('insufficient privilege');
 
-  // 1. Cek skema / tabel belum tersedia (khusus tahap database, tidak menyamaratakan seluruh 404)
+  // 1. Cek skema / tabel belum tersedia (khusus tahap database)
   const isMissingTableError =
     stage === 'database' &&
-    (codeUpper === '42P01' ||
-      codeUpper === 'PGRST205' ||
+    (rawCodeUpper === '42P01' ||
+      rawCodeUpper === 'PGRST205' ||
       (status === 404 &&
         (lower.includes('could not find the table') ||
           lower.includes('does not exist') ||
@@ -636,15 +725,24 @@ export function interpretRestError(
           lower.includes('profiles'))));
 
   if (isMissingTableError) {
+    const errCode = rawCode || sbErrorCode || 'PGRST205';
     return {
       isConfigured: true,
       connected: false,
       state: 'needs_schema',
       gatewayConnected: true,
+      gatewayReachable: true,
       apiKeyValid: true,
+      apiKeyAccepted: true,
       databaseAccessible: false,
       httpStatus: status ?? 404,
-      errorCode: code || 'PGRST205',
+      errorCode: errCode,
+      gatewayHttpStatus,
+      databaseHttpStatus: status ?? 404,
+      gatewayErrorCode: null,
+      databaseErrorCode: errCode,
+      failedStage: 'database',
+      diagnosticDetails,
       message: 'Gateway dan API Key berhasil, tetapi tabel profiles belum ditemukan.',
       testedAt,
       tablesCreated: false,
@@ -653,21 +751,61 @@ export function interpretRestError(
     };
   }
 
-  // 2. Cek penolakan izin database / RLS (42501 / 403 non-auth) sebelum menyimpulkan auth_error
+  // 2. Endpoint tidak sesuai (404 tanpa indikasi tabel belum ada)
+  if (status === 404) {
+    const errCode = code || 'ENDPOINT_NOT_FOUND';
+    return {
+      isConfigured: true,
+      connected: false,
+      state: 'unknown_error',
+      gatewayConnected: errorObj.gatewayConnected ?? (stage === 'database'),
+      gatewayReachable: errorObj.gatewayConnected ?? (stage === 'database'),
+      apiKeyValid: errorObj.apiKeyValid ?? false,
+      apiKeyAccepted: errorObj.apiKeyValid ?? false,
+      databaseAccessible: false,
+      httpStatus: 404,
+      errorCode: errCode,
+      gatewayHttpStatus,
+      databaseHttpStatus,
+      gatewayErrorCode: stage === 'gateway' ? errCode : null,
+      databaseErrorCode: stage === 'database' ? errCode : null,
+      failedStage: stage,
+      diagnosticDetails,
+      message:
+        stage === 'gateway'
+          ? 'Endpoint pemeriksaan Auth Health (/auth/v1/health) tidak ditemukan (HTTP 404).'
+          : 'Endpoint REST tabel profiles tidak ditemukan atau belum terekspos (HTTP 404).',
+      testedAt,
+      tablesCreated: false,
+      url,
+      source,
+    };
+  }
+
+  // 3. Cek penolakan izin database / RLS (42501 atau 403 non-Invalid-API-Key)
   if (
     isPermissionOrRlsError ||
-    (stage === 'database' && status === 403 && !isApiKeyOrJwtRejection) ||
-    (stage === 'gateway' && status === 403 && !isApiKeyOrJwtRejection && !lower.includes('unauthorized'))
+    (stage === 'database' && status === 403 && !isInvalidApiKey) ||
+    (stage === 'gateway' && status === 403 && !isInvalidApiKey && !lower.includes('unauthorized'))
   ) {
+    const errCode = rawCode || sbErrorCode || (status ? `HTTP_${status}` : '42501');
     return {
       isConfigured: true,
       connected: false,
       state: 'permission_error',
       gatewayConnected: errorObj.gatewayConnected ?? true,
+      gatewayReachable: errorObj.gatewayConnected ?? true,
       apiKeyValid: errorObj.apiKeyValid ?? true,
+      apiKeyAccepted: errorObj.apiKeyValid ?? true,
       databaseAccessible: false,
       httpStatus: status ?? 403,
-      errorCode: code || (status ? `HTTP_${status}` : '42501'),
+      errorCode: errCode,
+      gatewayHttpStatus,
+      databaseHttpStatus: stage === 'database' ? status ?? 403 : null,
+      gatewayErrorCode: stage === 'gateway' ? errCode : null,
+      databaseErrorCode: stage === 'database' ? errCode : null,
+      failedStage: stage,
+      diagnosticDetails,
       message: 'API Key diterima, tetapi akses tabel profiles dibatasi oleh izin database atau RLS.',
       testedAt,
       tablesCreated: true,
@@ -676,43 +814,82 @@ export function interpretRestError(
     };
   }
 
-  // 3. Penolakan autentikasi / API Key / JWT (401, PGRST301, atau 403 terkait API Key)
+  // 4. Penolakan autentikasi / API Key / JWT (401, PGRST301, atau 403 Invalid API Key)
+  // Penting: Jika Stage 1 (/auth/v1/health) sudah berhasil (apiKeyValid=true) dan Stage 2 menghasilkan 401
+  // tanpa UNAUTHORIZED_INVALID_API_KEY, JANGAN langsung menyimpulkan API Key salah.
   if (
-    isApiKeyOrJwtRejection ||
+    isInvalidApiKey ||
+    isInvalidJwt ||
+    isMissingCredentials ||
     status === 401 ||
-    (status === 403 && isApiKeyOrJwtRejection) ||
+    (status === 403 && isInvalidApiKey) ||
     lower.includes('unauthorized')
   ) {
+    const errCode = sbErrorCode || rawCode || (status ? `HTTP_${status}` : 'AUTH_ERROR');
+    const stage1AlreadyAcceptedKey = stage === 'database' && errorObj.apiKeyValid === true && !isInvalidApiKey;
+    const gatewayUp = errorObj.gatewayConnected ?? Boolean(status);
+
+    let friendlyMessage = 'Periksa API Key atau token autentikasi. Server Supabase menolak kredensial yang digunakan.';
+    if (isInvalidApiKey) {
+      friendlyMessage = isMissingCredentials
+        ? 'Header apikey tidak ditemukan pada request Supabase.'
+        : 'API Key ditolak oleh gateway Supabase (Invalid API Key). Periksa kecocokan VITE_SUPABASE_PUBLISHABLE_KEY.';
+    } else if (stage1AlreadyAcceptedKey) {
+      friendlyMessage = isInvalidJwt
+        ? 'Gateway Auth Health menerima Publishable Key, tetapi endpoint profiles menolak JWT/Authorization (PGRST301). Pastikan tidak ada API Key dikirim sebagai Bearer atau login ulang.'
+        : 'Gateway Auth Health menerima Publishable Key (HTTP 200), namun endpoint profiles mengembalikan HTTP 401 (akses anonim dibatasi / membutuhkan sesi JWT atau izin peran anon).';
+    } else if (isInvalidJwt) {
+      friendlyMessage = 'Token JWT ditolak oleh PostgREST (Invalid JWT / PGRST301). Periksa sesi autentikasi pengguna.';
+    }
+
+    // Jika Stage 1 lulus dan Stage 2 401 bukan Invalid API Key (mis. anon REST disabled / butuh sesi), bedakan dari Invalid API Key
+    const derivedState: SupabaseConnectionState =
+      stage1AlreadyAcceptedKey && !isInvalidJwt ? 'permission_error' : 'auth_error';
+
     return {
       isConfigured: true,
       connected: false,
-      state: 'auth_error',
-      gatewayConnected: errorObj.gatewayConnected ?? Boolean(status),
-      apiKeyValid: false,
+      state: derivedState,
+      gatewayConnected: gatewayUp,
+      gatewayReachable: gatewayUp,
+      apiKeyValid: stage1AlreadyAcceptedKey,
+      apiKeyAccepted: stage1AlreadyAcceptedKey,
       databaseAccessible: false,
       httpStatus: status ?? 401,
-      errorCode: code || (status ? `HTTP_${status}` : 'AUTH_ERROR'),
-      message:
-        codeUpper === 'PGRST301'
-          ? 'Token JWT atau header Bearer ditolak oleh PostgREST (PGRST301). Periksa API Key atau sesi autentikasi.'
-          : 'Periksa API Key atau token autentikasi. Server Supabase menolak kredensial yang digunakan.',
+      errorCode: errCode,
+      gatewayHttpStatus,
+      databaseHttpStatus: stage === 'database' ? status ?? 401 : null,
+      gatewayErrorCode: stage === 'gateway' ? errCode : null,
+      databaseErrorCode: stage === 'database' ? errCode : null,
+      failedStage: stage,
+      diagnosticDetails,
+      message: friendlyMessage,
       testedAt,
-      tablesCreated: false,
+      tablesCreated: stage1AlreadyAcceptedKey,
       url,
       source,
     };
   }
 
-  // 4. Kesalahan lain yang tidak termasuk kategori di atas (mis. 404 bukan tabel, 500, dsb.)
+  // 5. Kesalahan lain yang tidak termasuk kategori di atas (mis. 500)
+  const fallbackErrCode = code || (status ? `HTTP_${status}` : 'UNKNOWN_ERROR');
   return {
     isConfigured: true,
     connected: false,
     state: 'unknown_error',
     gatewayConnected: errorObj.gatewayConnected ?? Boolean(status),
+    gatewayReachable: errorObj.gatewayConnected ?? Boolean(status),
     apiKeyValid: errorObj.apiKeyValid ?? false,
+    apiKeyAccepted: errorObj.apiKeyValid ?? false,
     databaseAccessible: false,
     httpStatus: status,
-    errorCode: code || (status ? `HTTP_${status}` : 'UNKNOWN_ERROR'),
+    errorCode: fallbackErrCode,
+    gatewayHttpStatus,
+    databaseHttpStatus: stage === 'database' ? status : null,
+    gatewayErrorCode: stage === 'gateway' ? fallbackErrCode : null,
+    databaseErrorCode: stage === 'database' ? fallbackErrCode : null,
+    failedStage: stage,
+    diagnosticDetails,
     message: msg || 'Terjadi kesalahan koneksi yang tidak dapat diklasifikasikan. Periksa informasi diagnostik.',
     testedAt,
     tablesCreated: false,
@@ -721,26 +898,45 @@ export function interpretRestError(
   };
 }
 
-async function parseSafeErrorBody(response: Response): Promise<{ message?: string; code?: string | null }> {
+async function parseSafeErrorBody(response: Response): Promise<{
+  message?: string | null;
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
+  sbErrorCode?: string | null;
+}> {
+  const sbErrorCode = sanitizeDiagnosticText(
+    response.headers.get('sb-error-code') || response.headers.get('x-sb-error-code')
+  );
+
   try {
     const text = await response.text();
-    if (!text) return {};
+    if (!text) return { sbErrorCode };
     try {
       const parsed = JSON.parse(text);
       return {
-        message: parsed?.message || parsed?.error_description || parsed?.hint || parsed?.error,
-        code: parsed?.code || parsed?.error_code || null,
+        message: sanitizeDiagnosticText(
+          parsed?.message || parsed?.error_description || parsed?.error || response.statusText
+        ),
+        code: sanitizeDiagnosticText(parsed?.code ? String(parsed.code) : parsed?.error_code ? String(parsed.error_code) : null),
+        details: sanitizeDiagnosticText(parsed?.details),
+        hint: sanitizeDiagnosticText(parsed?.hint),
+        sbErrorCode,
       };
     } catch {
-      return { message: text.slice(0, 200) };
+      return {
+        message: sanitizeDiagnosticText(text.slice(0, 220)),
+        sbErrorCode,
+      };
     }
   } catch {
-    return {};
+    return { sbErrorCode };
   }
 }
 
-// Menguji koneksi nyata ke Supabase dalam 2 tahap (Gateway+API Key -> Tabel+Izin Database)
-// Menggunakan metode GET saja dan hanya 1 singleton client.
+// Menguji koneksi nyata ke Supabase dalam 2 tahap:
+// Tahap 1: GET /auth/v1/health (kompatibel dengan sb_publishable_ via header apikey, tanpa Bearer)
+// Tahap 2: GET /rest/v1/profiles?select=id&limit=1 (dengan access_token sesi aktif jika ada, tanpa API Key sebagai Bearer)
 export const testSupabaseConnection = async (
   customUrl?: string,
   customKey?: string
@@ -754,7 +950,6 @@ export const testSupabaseConnection = async (
   const envUrlRaw = getEnvSupabaseUrl();
   const envKeyRaw = getEnvSupabaseKey();
 
-  // Tentukan apakah pengujian memakai konfigurasi Vercel Env atau input manual browser yang berbeda
   const customMatchesEnvUrl = !rawCustomUrl ? !envUrlRaw : Boolean(envUrlRaw && rawCustomUrl === envUrlRaw);
   const customMatchesEnvKey = !rawCustomKey ? !envKeyRaw : Boolean(envKeyRaw && rawCustomKey === envKeyRaw);
   const isTestingEnvConfig =
@@ -778,20 +973,36 @@ export const testSupabaseConnection = async (
   const apiKeyPresent = Boolean(targetKey) || (isTestingEnvConfig && cfg.apiKeyPresent);
   const apiKeyFormatValid = Boolean(targetKey && keyCheck.valid);
 
-  // 1. Jika Env error sudah terdeteksi dan admin menguji konfigurasi Env (tidak menimpa dengan input valid baru)
+  // 1. Jika Env error sudah terdeteksi dan admin menguji konfigurasi Env
   if (isTestingEnvConfig && cfg.hasEnvConfig && cfg.envError) {
     const isUrlIssue = !validateSupabaseUrlDetail(cfg.envUrl).valid;
+    const errCode = isUrlIssue ? 'INVALID_URL' : apiKeyPresent ? 'INVALID_KEY_FORMAT' : 'MISSING_API_KEY';
     return {
       isConfigured: Boolean(cfg.url && cfg.key),
       connected: false,
       state: isUrlIssue ? 'network_error' : 'auth_error',
       gatewayConnected: false,
+      gatewayReachable: false,
       apiKeyValid: false,
+      apiKeyAccepted: false,
       apiKeyPresent,
       apiKeyFormatValid,
       databaseAccessible: false,
       httpStatus: null,
-      errorCode: isUrlIssue ? 'INVALID_URL' : apiKeyPresent ? 'INVALID_KEY_FORMAT' : 'MISSING_API_KEY',
+      errorCode: errCode,
+      gatewayHttpStatus: null,
+      databaseHttpStatus: null,
+      gatewayErrorCode: null,
+      databaseErrorCode: null,
+      failedStage: 'config',
+      diagnosticDetails: {
+        message: cfg.envError,
+        code: errCode,
+        details: null,
+        hint: null,
+        httpStatus: null,
+        sbErrorCode: null,
+      },
       message: cfg.envError,
       testedAt,
       tablesCreated: false,
@@ -802,20 +1013,36 @@ export const testSupabaseConnection = async (
   }
 
   if (!targetUrl && !targetKey) {
+    const msg =
+      cfg.envError ||
+      'Belum terkonfigurasi: VITE_SUPABASE_URL dan VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY belum tersedia.';
     return {
       isConfigured: false,
       connected: false,
       state: 'not_configured',
       gatewayConnected: false,
+      gatewayReachable: false,
       apiKeyValid: false,
+      apiKeyAccepted: false,
       apiKeyPresent: false,
       apiKeyFormatValid: false,
       databaseAccessible: false,
       httpStatus: null,
       errorCode: 'NOT_CONFIGURED',
-      message:
-        cfg.envError ||
-        'Belum terkonfigurasi: VITE_SUPABASE_URL dan VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY belum tersedia.',
+      gatewayHttpStatus: null,
+      databaseHttpStatus: null,
+      gatewayErrorCode: null,
+      databaseErrorCode: null,
+      failedStage: 'config',
+      diagnosticDetails: {
+        message: msg,
+        code: 'NOT_CONFIGURED',
+        details: null,
+        hint: null,
+        httpStatus: null,
+        sbErrorCode: null,
+      },
+      message: msg,
       testedAt,
       tablesCreated: false,
       source: effectiveSource,
@@ -825,18 +1052,34 @@ export const testSupabaseConnection = async (
 
   const urlCheck = validateSupabaseUrlDetail(targetUrl);
   if (!urlCheck.valid) {
+    const msg = urlCheck.error || 'Format URL Supabase tidak valid.';
     return {
       isConfigured: Boolean(targetUrl && targetKey),
       connected: false,
       state: 'network_error',
       gatewayConnected: false,
+      gatewayReachable: false,
       apiKeyValid: false,
+      apiKeyAccepted: false,
       apiKeyPresent,
       apiKeyFormatValid,
       databaseAccessible: false,
       httpStatus: null,
       errorCode: 'INVALID_URL',
-      message: urlCheck.error || 'Format URL Supabase tidak valid.',
+      gatewayHttpStatus: null,
+      databaseHttpStatus: null,
+      gatewayErrorCode: null,
+      databaseErrorCode: null,
+      failedStage: 'config',
+      diagnosticDetails: {
+        message: msg,
+        code: 'INVALID_URL',
+        details: null,
+        hint: null,
+        httpStatus: null,
+        sbErrorCode: null,
+      },
+      message: msg,
       testedAt,
       tablesCreated: false,
       url: targetUrl || undefined,
@@ -846,20 +1089,36 @@ export const testSupabaseConnection = async (
   }
 
   if (!targetKey) {
+    const msg =
+      cfg.envError ||
+      'API Key Supabase (VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY) belum tersedia.';
     return {
       isConfigured: false,
       connected: false,
       state: 'auth_error',
       gatewayConnected: false,
+      gatewayReachable: false,
       apiKeyValid: false,
+      apiKeyAccepted: false,
       apiKeyPresent: false,
       apiKeyFormatValid: false,
       databaseAccessible: false,
       httpStatus: null,
       errorCode: 'MISSING_API_KEY',
-      message:
-        cfg.envError ||
-        'API Key Supabase (VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY) belum tersedia.',
+      gatewayHttpStatus: null,
+      databaseHttpStatus: null,
+      gatewayErrorCode: null,
+      databaseErrorCode: null,
+      failedStage: 'config',
+      diagnosticDetails: {
+        message: msg,
+        code: 'MISSING_API_KEY',
+        details: null,
+        hint: null,
+        httpStatus: null,
+        sbErrorCode: null,
+      },
+      message: msg,
       testedAt,
       tablesCreated: false,
       url: urlCheck.normalizedUrl,
@@ -869,18 +1128,34 @@ export const testSupabaseConnection = async (
   }
 
   if (!keyCheck.valid) {
+    const msg = keyCheck.error || 'Format API Key Supabase tidak valid.';
     return {
       isConfigured: true,
       connected: false,
       state: 'auth_error',
       gatewayConnected: false,
+      gatewayReachable: false,
       apiKeyValid: false,
+      apiKeyAccepted: false,
       apiKeyPresent: true,
       apiKeyFormatValid: false,
       databaseAccessible: false,
       httpStatus: null,
       errorCode: 'INVALID_KEY_FORMAT',
-      message: keyCheck.error || 'Format API Key Supabase tidak valid.',
+      gatewayHttpStatus: null,
+      databaseHttpStatus: null,
+      gatewayErrorCode: null,
+      databaseErrorCode: null,
+      failedStage: 'config',
+      diagnosticDetails: {
+        message: msg,
+        code: 'INVALID_KEY_FORMAT',
+        details: null,
+        hint: null,
+        httpStatus: null,
+        sbErrorCode: null,
+      },
+      message: msg,
       testedAt,
       tablesCreated: false,
       url: urlCheck.normalizedUrl,
@@ -894,18 +1169,25 @@ export const testSupabaseConnection = async (
     urlCheck.normalizedUrl === cfg.url &&
     targetKey === cfg.key;
 
-  const resolvedSource = isTestingEnvConfig && cfg.hasEnvConfig ? 'env' : matchesActiveConfig ? cfg.source : effectiveSource;
+  const resolvedSource =
+    isTestingEnvConfig && cfg.hasEnvConfig ? 'env' : matchesActiveConfig ? cfg.source : effectiveSource;
+
+  let currentStage: 'gateway' | 'database' = 'gateway';
+  let gatewayHttpStatus: number | null = null;
+  let gatewayOk = false;
 
   try {
     // =========================================================================
-    // TAHAP 1: Pengujian Gateway & API Key (/rest/v1/)
-    // Untuk sb_publishable_, hanya mengirim header apikey (tanpa Bearer).
+    // TAHAP 1: Pengujian Gateway & API Key menggunakan /auth/v1/health
+    // Catatan: Endpoint /rest/v1/ (OpenAPI root) tidak kompatibel dengan sb_publishable_.
     // =========================================================================
     const gatewayHeaders = buildSupabaseRestHeaders(targetKey);
-    const gatewayResponse = await globalThis.fetch(`${urlCheck.normalizedUrl}/rest/v1/`, {
+    const gatewayResponse = await globalThis.fetch(`${urlCheck.normalizedUrl}/auth/v1/health`, {
       method: 'GET',
       headers: gatewayHeaders,
     });
+
+    gatewayHttpStatus = gatewayResponse.status;
 
     if (!gatewayResponse.ok) {
       const gatewayBody = await parseSafeErrorBody(gatewayResponse);
@@ -914,9 +1196,13 @@ export const testSupabaseConnection = async (
           {
             message: gatewayBody.message || gatewayResponse.statusText || `HTTP ${gatewayResponse.status}`,
             code: gatewayBody.code,
+            details: gatewayBody.details,
+            hint: gatewayBody.hint,
+            sbErrorCode: gatewayBody.sbErrorCode,
             status: gatewayResponse.status,
             stage: 'gateway',
             gatewayConnected: gatewayResponse.status < 502,
+            gatewayHttpStatus: gatewayResponse.status,
             apiKeyValid: false,
           },
           urlCheck.normalizedUrl,
@@ -929,9 +1215,14 @@ export const testSupabaseConnection = async (
       };
     }
 
+    gatewayOk = true;
+    currentStage = 'database';
+
     // =========================================================================
     // TAHAP 2: Pengujian Tabel & Izin Database (/rest/v1/profiles?select=id&limit=1)
+    // Header: apikey: [PUBLISHABLE KEY], dan Authorization: Bearer <user_jwt> hanya jika ada sesi valid.
     // =========================================================================
+    let activeSessionToken: string | null = null;
     if (matchesActiveConfig || !hasCustomInput) {
       const client = getSupabaseClient();
       if (!client) {
@@ -940,12 +1231,27 @@ export const testSupabaseConnection = async (
           connected: false,
           state: 'unknown_error',
           gatewayConnected: true,
+          gatewayReachable: true,
           apiKeyValid: true,
+          apiKeyAccepted: true,
           apiKeyPresent: true,
           apiKeyFormatValid: true,
           databaseAccessible: false,
           httpStatus: null,
           errorCode: 'CLIENT_INIT_FAILED',
+          gatewayHttpStatus,
+          databaseHttpStatus: null,
+          gatewayErrorCode: null,
+          databaseErrorCode: 'CLIENT_INIT_FAILED',
+          failedStage: 'database',
+          diagnosticDetails: {
+            message: 'Gateway Auth Health berhasil, namun singleton Supabase client gagal diinisialisasi.',
+            code: 'CLIENT_INIT_FAILED',
+            details: null,
+            hint: null,
+            httpStatus: null,
+            sbErrorCode: null,
+          },
           message: 'Gateway & API Key aktif, namun singleton Supabase client gagal diinisialisasi.',
           testedAt,
           tablesCreated: false,
@@ -955,53 +1261,27 @@ export const testSupabaseConnection = async (
         };
       }
 
-      const { error: tableError, status } = await client
-        .from('profiles')
-        .select('id')
-        .limit(1);
-
-      if (!tableError) {
-        return {
-          ...interpretRestError(null, urlCheck.normalizedUrl, resolvedSource, testedAt),
-          apiKeyPresent: true,
-          apiKeyFormatValid: true,
-          localConflictWarning: cfg.localConflictWarning,
-        };
+      try {
+        const { data: sessionData } = await client.auth.getSession();
+        activeSessionToken = sessionData?.session?.access_token || null;
+      } catch {
+        activeSessionToken = null;
       }
-
-      return {
-        ...interpretRestError(
-          {
-            message: tableError.message,
-            code: tableError.code,
-            status,
-            stage: 'database',
-            gatewayConnected: true,
-            apiKeyValid: true,
-          },
-          urlCheck.normalizedUrl,
-          resolvedSource,
-          testedAt
-        ),
-        apiKeyPresent: true,
-        apiKeyFormatValid: true,
-        localConflictWarning: cfg.localConflictWarning,
-      };
     }
 
-    // Jika Admin menguji kredensial sementara di form Pengaturan sebelum disimpan,
-    // gunakan fetch REST read-only dengan header aman tanpa membuat createClient() kedua.
     const dbResponse = await globalThis.fetch(
       `${urlCheck.normalizedUrl}/rest/v1/profiles?select=id&limit=1`,
       {
         method: 'GET',
-        headers: buildSupabaseRestHeaders(targetKey),
+        headers: buildSupabaseRestHeaders(targetKey, activeSessionToken),
       }
     );
 
     if (dbResponse.ok) {
       return {
         ...interpretRestError(null, urlCheck.normalizedUrl, resolvedSource, testedAt),
+        gatewayHttpStatus,
+        databaseHttpStatus: dbResponse.status,
         apiKeyPresent: true,
         apiKeyFormatValid: true,
         localConflictWarning: cfg.localConflictWarning,
@@ -1014,9 +1294,14 @@ export const testSupabaseConnection = async (
         {
           message: dbBody.message || dbResponse.statusText || `HTTP ${dbResponse.status}`,
           code: dbBody.code,
+          details: dbBody.details,
+          hint: dbBody.hint,
+          sbErrorCode: dbBody.sbErrorCode,
           status: dbResponse.status,
           stage: 'database',
           gatewayConnected: true,
+          gatewayHttpStatus,
+          gatewayErrorCode: null,
           apiKeyValid: true,
         },
         urlCheck.normalizedUrl,
@@ -1034,7 +1319,10 @@ export const testSupabaseConnection = async (
           message: err?.message || 'Failed to fetch',
           code: 'NETWORK_ERROR',
           status: null,
-          stage: 'gateway',
+          stage: currentStage,
+          gatewayConnected: gatewayOk,
+          gatewayHttpStatus,
+          apiKeyValid: gatewayOk,
         },
         urlCheck.normalizedUrl,
         resolvedSource,
