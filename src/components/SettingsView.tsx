@@ -106,9 +106,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Supabase Configuration (Prioritas Utama: Environment Variables Vercel)
   const initialSupabaseConfig = useMemo(() => getSupabaseConfig(), []);
-  const hasActiveEnvConfig = initialSupabaseConfig.source === 'env';
+  const hasAnyEnvInBuild = initialSupabaseConfig.hasEnvConfig;
+  const hasActiveEnvConfig = initialSupabaseConfig.source === 'env' && initialSupabaseConfig.isConfigured;
   const [supabaseUrlInput, setSupabaseUrlInput] = useState(() => {
-    return getEnvSupabaseUrl() || initialSupabaseConfig.url || '';
+    return initialSupabaseConfig.envUrl || initialSupabaseConfig.url || '';
   });
   const [supabaseKeyInput, setSupabaseKeyInput] = useState(() => {
     return getEnvSupabaseKey() || initialSupabaseConfig.key || '';
@@ -194,7 +195,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (!isAdmin) return;
     setIsTestingConnection(true);
     setTestFeedback(null);
-    const result = await checkSupabaseConnection(supabaseUrlInput, supabaseKeyInput);
+
+    const cleanedInputUrl = cleanCredentialString(supabaseUrlInput).replace(/\/+$/, '');
+    const cleanedInputKey = cleanCredentialString(supabaseKeyInput);
+    const envUrl = getEnvSupabaseUrl();
+    const envKey = getEnvSupabaseKey();
+
+    const isMatchingEnv =
+      hasAnyEnvInBuild &&
+      cleanedInputUrl === envUrl &&
+      (!envKey || cleanedInputKey === envKey);
+
+    const result = isMatchingEnv
+      ? await checkSupabaseConnection()
+      : await checkSupabaseConnection(supabaseUrlInput, supabaseKeyInput);
+
     setIsTestingConnection(false);
     setTestFeedback(result);
   };
@@ -332,8 +347,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const envUrl = getEnvSupabaseUrl();
     const envKey = getEnvSupabaseKey();
 
-    if (isValidSupabaseUrl(envUrl) && isValidSupabaseKey(envKey)) {
-      // Environment Variables Vercel aktif: pastikan tidak tertimpa nilai localStorage lama
+    if (hasAnyEnvInBuild || (isValidSupabaseUrl(envUrl) && isValidSupabaseKey(envKey))) {
+      // Environment Variables Vercel aktif di build produksi: bersihkan sisa localStorage agar tidak menimpa produksi
       localStorage.removeItem('sibahar_supabase_url');
       localStorage.removeItem('sibahar_supabase_key');
       checkSupabaseConnection();
@@ -344,7 +359,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } else {
       localStorage.removeItem('sibahar_supabase_url');
       localStorage.removeItem('sibahar_supabase_key');
-      checkSupabaseConnection('', '');
+      checkSupabaseConnection();
     }
 
     setSavedSuccess(true);
@@ -1079,11 +1094,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               const currentStat = testFeedback || supabaseStatus;
               const sourceLabel =
                 currentStat.source === 'env'
-                  ? 'Environment Variables (Vercel / Vite)'
+                  ? 'Vercel Environment'
                   : currentStat.source === 'localStorage'
-                  ? 'Penyimpanan Browser (Fallback Lokal)'
+                  ? 'Browser Manual Configuration'
                   : currentStat.source === 'mixed'
-                  ? 'Kombinasi Environment Variables & Browser'
+                  ? 'Kombinasi Vercel Environment & Browser Manual'
                   : 'Belum Terkonfigurasi';
 
               const stateMeta: Record<
@@ -1226,12 +1241,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
                       <span className="block text-[10px] text-slate-500">Status API Key</span>
-                      <span className={`font-semibold ${currentStat.apiKeyValid ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      <span
+                        className={`font-semibold ${
+                          currentStat.apiKeyValid
+                            ? 'text-emerald-700'
+                            : currentStat.apiKeyFormatValid
+                            ? 'text-amber-700'
+                            : 'text-rose-700'
+                        }`}
+                      >
                         {currentStat.apiKeyValid
                           ? 'Diterima Server'
-                          : currentStat.isConfigured
-                          ? 'Ditolak / Tidak Valid'
-                          : 'Belum Tersedia'}
+                          : !currentStat.apiKeyPresent && currentStat.errorCode !== 'INVALID_KEY_FORMAT'
+                          ? 'Belum Tersedia'
+                          : currentStat.apiKeyFormatValid
+                          ? 'Format Valid (Belum Diuji)'
+                          : 'Ditolak / Tidak Valid'}
                       </span>
                     </div>
 
@@ -1283,8 +1308,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             })()}
 
             {hasActiveEnvConfig && (
-              <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 text-[11px] text-emerald-900">
-                <strong>Environment Variables Vercel Aktif:</strong> Kredensial dari <code className="font-mono">VITE_SUPABASE_URL</code> dan API Key Vercel menjadi sumber konfigurasi utama aplikasi secara otomatis.
+              <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 text-[11px] text-emerald-900 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <strong>Vercel Environment Aktif:</strong> Kredensial dari{' '}
+                  <code className="font-mono">VITE_SUPABASE_URL</code> dan API Key Vercel menjadi sumber konfigurasi utama aplikasi secara otomatis.
+                </div>
+                {(cleanCredentialString(supabaseUrlInput).replace(/\/+$/, '') !== getEnvSupabaseUrl() ||
+                  (getEnvSupabaseKey() && cleanCredentialString(supabaseKeyInput) !== getEnvSupabaseKey())) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSupabaseUrlInput(getEnvSupabaseUrl());
+                      setSupabaseKeyInput(getEnvSupabaseKey());
+                      setTestFeedback(null);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-800 font-semibold hover:bg-emerald-50 cursor-pointer"
+                  >
+                    Reset ke Vercel Env
+                  </button>
+                )}
+              </div>
+            )}
+
+            {(initialSupabaseConfig.localConflictWarning ||
+              supabaseStatus.localConflictWarning ||
+              (hasAnyEnvInBuild &&
+                (cleanCredentialString(supabaseUrlInput).replace(/\/+$/, '') !== getEnvSupabaseUrl() ||
+                  (getEnvSupabaseKey() && cleanCredentialString(supabaseKeyInput) !== getEnvSupabaseKey())))) && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-[11px] text-amber-950">
+                <strong>Peringatan Konfigurasi Lokal:</strong>{' '}
+                {initialSupabaseConfig.localConflictWarning ||
+                  supabaseStatus.localConflictWarning ||
+                  'Nilai input manual di browser saat ini berbeda dengan Environment Variables produksi Vercel. Pengujian akan ditandai sebagai Browser Manual Configuration.'}
               </div>
             )}
 

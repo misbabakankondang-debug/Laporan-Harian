@@ -8,10 +8,21 @@ const STORAGE_URL_KEY = 'sibahar_supabase_url';
 const STORAGE_ANON_KEY = 'sibahar_supabase_key';
 const SINGLETON_AUTH_STORAGE_KEY = 'sibahar-supabase-auth';
 
-// Membersihkan string kredensial dari spasi dan tanda kutip yang tidak disengaja
+// Karakter tidak terlihat (zero-width, BOM, non-breaking space, control chars) yang sering terbawa saat copy-paste
+const INVISIBLE_UNICODE_REGEX =
+  /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF\u00AD\u00A0\u0000-\u001F\u007F-\u009F]/g;
+
+export const stripInvisibleChars = (val: string): string => {
+  return val.replace(INVISIBLE_UNICODE_REGEX, '');
+};
+
+// Membersihkan string kredensial dari karakter tersembunyi, spasi, dan tanda kutip yang tidak disengaja
 export const cleanCredentialString = (val: string | null | undefined): string => {
   if (!val || typeof val !== 'string') return '';
-  return val.trim().replace(/^["']|["']$/g, '').trim();
+  return stripInvisibleChars(val)
+    .trim()
+    .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '')
+    .trim();
 };
 
 export const normalizeSupabaseUrl = (urlString: string | null | undefined): string => {
@@ -47,24 +58,27 @@ export const getEnvSupabaseKey = (): string => {
 export interface UrlValidationResult {
   valid: boolean;
   normalizedUrl: string;
+  hostname?: string;
+  projectRef?: string;
   error?: string;
 }
 
-// Validasi format URL Supabase, hostname, dan Project Reference resmi SIBAHAR
+// Validasi format URL Supabase menggunakan parser standar URL, HTTPS, hostname, dan Project Reference resmi
 export const validateSupabaseUrlDetail = (urlString: string | null | undefined): UrlValidationResult => {
   const normalized = normalizeSupabaseUrl(urlString);
   if (!normalized) {
     return { valid: false, normalizedUrl: '', error: 'URL Supabase belum diisi.' };
   }
 
+  const lowerNormalized = normalized.toLowerCase();
   if (
     normalized.includes('<') ||
     normalized.includes('>') ||
     normalized.includes('[') ||
     normalized.includes(']') ||
-    normalized.includes('your-project') ||
-    normalized.includes('example.com') ||
-    normalized.includes('xyzcompany')
+    lowerNormalized.includes('your-project') ||
+    lowerNormalized.includes('example.com') ||
+    lowerNormalized.includes('xyzcompany')
   ) {
     return {
       valid: false,
@@ -73,39 +87,17 @@ export const validateSupabaseUrlDetail = (urlString: string | null | undefined):
     };
   }
 
-  if (!normalized.startsWith('https://')) {
+  if (/[^\x20-\x7E]/.test(normalized)) {
     return {
       valid: false,
       normalizedUrl: normalized,
-      error: `Format URL Supabase tidak valid (wajib diawali https://). Gunakan ${EXPECTED_SUPABASE_URL}`,
+      error: `URL Supabase mengandung karakter non-ASCII / homoglyph tersembunyi. Ketik ulang secara bersih: ${EXPECTED_SUPABASE_URL}`,
     };
   }
 
+  let urlObj: URL;
   try {
-    const urlObj = new URL(normalized);
-    const hostname = urlObj.hostname.toLowerCase();
-
-    if (!hostname.endsWith('.supabase.co')) {
-      return {
-        valid: false,
-        normalizedUrl: normalized,
-        error: `Hostname URL tidak valid (${hostname}). Harus berakhiran .supabase.co (${EXPECTED_SUPABASE_URL}).`,
-      };
-    }
-
-    const expectedHost = `${EXPECTED_SUPABASE_PROJECT_REF}.supabase.co`;
-    if (hostname !== expectedHost) {
-      return {
-        valid: false,
-        normalizedUrl: normalized,
-        error: `Project Reference URL tidak sesuai (${hostname}). Aplikasi SIBAHAR harus terhubung ke ${EXPECTED_SUPABASE_URL}.`,
-      };
-    }
-
-    return {
-      valid: true,
-      normalizedUrl: `https://${expectedHost}`,
-    };
+    urlObj = new URL(normalized);
   } catch {
     return {
       valid: false,
@@ -113,6 +105,70 @@ export const validateSupabaseUrlDetail = (urlString: string | null | undefined):
       error: `Format URL Supabase rusak/malformed. Gunakan ${EXPECTED_SUPABASE_URL}.`,
     };
   }
+
+  if (urlObj.protocol !== 'https:') {
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      error: `Protokol URL Supabase wajib HTTPS (ditemukan ${urlObj.protocol}). Gunakan ${EXPECTED_SUPABASE_URL}`,
+    };
+  }
+
+  if (urlObj.username || urlObj.password || urlObj.port) {
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      error: `URL Supabase tidak boleh mengandung kredensial atau port khusus. Gunakan ${EXPECTED_SUPABASE_URL}`,
+    };
+  }
+
+  const hostname = urlObj.hostname.toLowerCase();
+  if (hostname.startsWith('xn--') || hostname.includes('.xn--')) {
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      hostname,
+      error: `Hostname URL mengandung karakter IDN/homoglyph (${hostname}). Gunakan ${EXPECTED_SUPABASE_URL}.`,
+    };
+  }
+
+  if (!hostname.endsWith('.supabase.co')) {
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      hostname,
+      error: `Hostname URL tidak valid (${hostname}). Harus berakhiran .supabase.co (${EXPECTED_SUPABASE_URL}).`,
+    };
+  }
+
+  const projectRef = hostname.slice(0, -'.supabase.co'.length);
+  const expectedHost = `${EXPECTED_SUPABASE_PROJECT_REF}.supabase.co`;
+  if (projectRef !== EXPECTED_SUPABASE_PROJECT_REF || hostname !== expectedHost) {
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      hostname,
+      projectRef,
+      error: `Project Reference URL tidak sesuai (${hostname}). Aplikasi SIBAHAR harus terhubung ke ${EXPECTED_SUPABASE_URL}.`,
+    };
+  }
+
+  if ((urlObj.pathname && urlObj.pathname !== '/') || urlObj.search || urlObj.hash) {
+    return {
+      valid: false,
+      normalizedUrl: normalized,
+      hostname,
+      projectRef,
+      error: `URL Supabase tidak boleh menyertakan path tambahan atau query (${urlObj.pathname}). Gunakan ${EXPECTED_SUPABASE_URL}.`,
+    };
+  }
+
+  return {
+    valid: true,
+    normalizedUrl: urlObj.origin,
+    hostname,
+    projectRef,
+  };
 };
 
 export const isValidSupabaseUrl = (urlString: string | null | undefined): boolean => {
@@ -217,34 +273,65 @@ export interface SupabaseConfigResult {
   key: string;
   isConfigured: boolean;
   source: 'env' | 'localStorage' | 'mixed' | 'none';
+  hasEnvConfig: boolean;
+  envUrl: string;
+  hasEnvKey: boolean;
+  apiKeyPresent: boolean;
+  apiKeyFormatValid: boolean;
   envError?: string;
+  localConflictWarning?: string;
 }
 
-// Environment Variables (Vercel/Vite) adalah sumber utama; localStorage hanya fallback & dibersihkan bila usang/invalid
+// Environment Variables hasil build Vite adalah sumber utama untuk produksi.
+// Jika URL/Key Env tersedia tetapi invalid, JANGAN diam-diam beralih ke localStorage.
+// localStorage hanya dipakai saat Env belum diatur (pengembangan lokal / pengujian manual).
 export const getSupabaseConfig = (): SupabaseConfigResult => {
   const envUrlRaw = getEnvSupabaseUrl();
+  const envAnonRaw = cleanCredentialString(import.meta.env.VITE_SUPABASE_ANON_KEY);
+  const envPubRaw = cleanCredentialString(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY);
   const envKeyRaw = getEnvSupabaseKey();
+  const hasAnyEnvKeyRaw = Boolean(envAnonRaw || envPubRaw);
+  const hasAnyEnvUrlRaw = Boolean(envUrlRaw);
+  const hasEnvConfig = hasAnyEnvUrlRaw || hasAnyEnvKeyRaw;
 
   const envUrlCheck = validateSupabaseUrlDetail(envUrlRaw);
   const envKeyCheck = validateSupabaseKeyDetail(envKeyRaw);
 
   let localUrl = '';
   let localKey = '';
+  let localConflictWarning: string | undefined;
+
   try {
     localUrl = normalizeSupabaseUrl(localStorage.getItem(STORAGE_URL_KEY));
     localKey = cleanCredentialString(localStorage.getItem(STORAGE_ANON_KEY));
   } catch {
-    // Ignore localStorage errors in restricted environments
+    // Abaikan error localStorage pada mode browser terbatas
   }
 
-  // Jika localStorage menyimpan URL lama / tidak cocok project reference / rusak -> hapus key URL tersebut saja (jangan sentuh data laporan)
+  // Audit & bersihkan konfigurasi localStorage lama/usang/konflik secara aman (jangan sentuh data laporan)
   if (localUrl) {
     const localUrlCheck = validateSupabaseUrlDetail(localUrl);
-    if (!localUrlCheck.valid || (envUrlCheck.valid && localUrlCheck.normalizedUrl !== envUrlCheck.normalizedUrl)) {
+    if (!localUrlCheck.valid) {
       try {
         localStorage.removeItem(STORAGE_URL_KEY);
       } catch {}
       localUrl = '';
+      localConflictWarning =
+        'Konfigurasi URL Supabase lama/tidak valid di penyimpanan browser telah dibersihkan secara aman.';
+    } else if (hasEnvConfig && envUrlCheck.valid && localUrlCheck.normalizedUrl !== envUrlCheck.normalizedUrl) {
+      try {
+        localStorage.removeItem(STORAGE_URL_KEY);
+      } catch {}
+      localUrl = '';
+      localConflictWarning =
+        'Konfigurasi URL di penyimpanan browser berbeda dengan Environment Variables produksi dan telah diabaikan/dibersihkan.';
+    } else if (hasEnvConfig) {
+      localUrl = localUrlCheck.normalizedUrl;
+      if (!localConflictWarning && envUrlCheck.valid) {
+        try {
+          localStorage.removeItem(STORAGE_URL_KEY);
+        } catch {}
+      }
     } else {
       localUrl = localUrlCheck.normalizedUrl;
     }
@@ -252,42 +339,76 @@ export const getSupabaseConfig = (): SupabaseConfigResult => {
 
   if (localKey) {
     const localKeyCheck = validateSupabaseKeyDetail(localKey);
-    if (!localKeyCheck.valid || (envKeyCheck.valid && localKey !== envKeyRaw)) {
+    if (!localKeyCheck.valid) {
       try {
         localStorage.removeItem(STORAGE_ANON_KEY);
       } catch {}
       localKey = '';
+      localConflictWarning =
+        localConflictWarning ||
+        'API Key Supabase usang/tidak valid di penyimpanan browser telah dibersihkan secara aman.';
+    } else if (hasEnvConfig && envKeyCheck.valid && localKey !== envKeyRaw) {
+      try {
+        localStorage.removeItem(STORAGE_ANON_KEY);
+      } catch {}
+      localKey = '';
+      localConflictWarning =
+        'API Key di penyimpanan browser berbeda dengan Environment Variables produksi dan telah diabaikan/dibersihkan.';
+    } else if (hasEnvConfig && envKeyCheck.valid) {
+      try {
+        localStorage.removeItem(STORAGE_ANON_KEY);
+      } catch {}
     }
   }
 
-  const effectiveUrl = envUrlCheck.valid ? envUrlCheck.normalizedUrl : localUrl;
-  const effectiveKey = envKeyCheck.valid ? envKeyRaw : localKey;
-
-  let source: SupabaseConfigResult['source'] = 'none';
-  if (envUrlCheck.valid && envKeyCheck.valid) {
-    source = 'env';
-  } else if (effectiveUrl && effectiveKey) {
-    source = envUrlCheck.valid || envKeyCheck.valid ? 'mixed' : 'localStorage';
-  }
-
-  const envAnonRaw = cleanCredentialString(import.meta.env.VITE_SUPABASE_ANON_KEY);
-  const envPubRaw = cleanCredentialString(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY);
-  const envKeyCandidateRaw = envKeyRaw || envAnonRaw || envPubRaw;
-
   let envError: string | undefined;
-  if (envUrlRaw && !envUrlCheck.valid) {
+  if (hasAnyEnvUrlRaw && !envUrlCheck.valid) {
     envError = `VITE_SUPABASE_URL: ${envUrlCheck.error}`;
-  } else if (envKeyCandidateRaw && !envKeyCheck.valid) {
-    const failedCheck = validateSupabaseKeyDetail(envKeyCandidateRaw);
-    envError = `VITE_SUPABASE_ANON_KEY / PUBLISHABLE_KEY: ${failedCheck.error}`;
+  } else if (!hasAnyEnvUrlRaw && hasAnyEnvKeyRaw) {
+    envError = `VITE_SUPABASE_URL belum tersedia di Environment Variables Vercel. Wajib diatur ke ${EXPECTED_SUPABASE_URL}.`;
+  } else if (hasAnyEnvUrlRaw && envUrlCheck.valid && !hasAnyEnvKeyRaw) {
+    envError =
+      'API Key Supabase (VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY) belum tersedia di Environment Variables Vercel.';
+  } else if (hasAnyEnvKeyRaw && !envKeyCheck.valid) {
+    const failedCandidate = envAnonRaw || envPubRaw;
+    const failedCheck = validateSupabaseKeyDetail(failedCandidate);
+    envError = `VITE_SUPABASE_PUBLISHABLE_KEY / ANON_KEY: ${failedCheck.error}`;
   }
 
+  // Jika Vercel/Vite Environment Variables terpasang (valid ataupun bermasalah),
+  // JANGAN diam-diam beralih ke localStorage agar produksi selalu transparan dan konsisten.
+  if (hasEnvConfig) {
+    const validUrl = envUrlCheck.valid ? envUrlCheck.normalizedUrl : '';
+    const validKey = envKeyCheck.valid ? envKeyRaw : '';
+    return {
+      url: validUrl,
+      key: validKey,
+      isConfigured: Boolean(validUrl && validKey),
+      source: 'env',
+      hasEnvConfig: true,
+      envUrl: envUrlRaw,
+      hasEnvKey: envKeyCheck.valid,
+      apiKeyPresent: hasAnyEnvKeyRaw,
+      apiKeyFormatValid: envKeyCheck.valid,
+      envError,
+      localConflictWarning,
+    };
+  }
+
+  // Fallback lokal (hanya jika Env Vite benar-benar kosong, mis. mode dev / pengujian manual)
+  const hasLocalConfig = Boolean(localUrl && localKey);
   return {
-    url: effectiveUrl,
-    key: effectiveKey,
-    isConfigured: Boolean(effectiveUrl && effectiveKey),
-    source,
+    url: hasLocalConfig ? localUrl : localUrl || '',
+    key: hasLocalConfig ? localKey : localKey || '',
+    isConfigured: hasLocalConfig,
+    source: hasLocalConfig || localUrl || localKey ? 'localStorage' : 'none',
+    hasEnvConfig: false,
+    envUrl: '',
+    hasEnvKey: false,
+    apiKeyPresent: Boolean(localKey),
+    apiKeyFormatValid: Boolean(localKey && validateSupabaseKeyDetail(localKey).valid),
     envError,
+    localConflictWarning,
   };
 };
 
@@ -306,6 +427,8 @@ export interface SupabaseConnectionStatus {
   state: SupabaseConnectionState;
   gatewayConnected: boolean;
   apiKeyValid: boolean;
+  apiKeyPresent?: boolean;
+  apiKeyFormatValid?: boolean;
   databaseAccessible: boolean;
   httpStatus: number | null;
   errorCode: string | null;
@@ -314,6 +437,7 @@ export interface SupabaseConnectionStatus {
   tablesCreated: boolean;
   url?: string;
   source?: SupabaseConfigResult['source'];
+  localConflictWarning?: string;
 }
 
 // Pembungkus fetch aman untuk SDK @supabase/supabase-js v2.119.0:
@@ -626,57 +750,133 @@ export const testSupabaseConnection = async (
   const rawCustomUrl = normalizeSupabaseUrl(customUrl);
   const rawCustomKey = cleanCredentialString(customKey);
 
-  const hasCustomInput = Boolean(rawCustomUrl || rawCustomKey);
-  const targetUrl = hasCustomInput ? rawCustomUrl : cfg.url;
-  const targetKey = hasCustomInput ? rawCustomKey : cfg.key;
-  const effectiveSource: SupabaseConfigResult['source'] = hasCustomInput ? 'localStorage' : cfg.source;
+  const hasCustomInput = customUrl !== undefined || customKey !== undefined;
+  const envUrlRaw = getEnvSupabaseUrl();
+  const envKeyRaw = getEnvSupabaseKey();
 
-  if (!targetUrl || !targetKey) {
+  // Tentukan apakah pengujian memakai konfigurasi Vercel Env atau input manual browser yang berbeda
+  const customMatchesEnvUrl = !rawCustomUrl ? !envUrlRaw : Boolean(envUrlRaw && rawCustomUrl === envUrlRaw);
+  const customMatchesEnvKey = !rawCustomKey ? !envKeyRaw : Boolean(envKeyRaw && rawCustomKey === envKeyRaw);
+  const isTestingEnvConfig =
+    !hasCustomInput || (cfg.hasEnvConfig && customMatchesEnvUrl && customMatchesEnvKey);
+
+  const targetUrl = isTestingEnvConfig ? (cfg.url || cfg.envUrl) : rawCustomUrl;
+  const targetKey = isTestingEnvConfig ? cfg.key : rawCustomKey;
+
+  let effectiveSource: SupabaseConfigResult['source'] = cfg.source;
+  if (hasCustomInput && !isTestingEnvConfig) {
+    if (cfg.hasEnvConfig && (customMatchesEnvUrl || customMatchesEnvKey)) {
+      effectiveSource = 'mixed';
+    } else {
+      effectiveSource = 'localStorage';
+    }
+  } else if (isTestingEnvConfig && cfg.hasEnvConfig) {
+    effectiveSource = 'env';
+  }
+
+  const keyCheck = validateSupabaseKeyDetail(targetKey);
+  const apiKeyPresent = Boolean(targetKey) || (isTestingEnvConfig && cfg.apiKeyPresent);
+  const apiKeyFormatValid = Boolean(targetKey && keyCheck.valid);
+
+  // 1. Jika Env error sudah terdeteksi dan admin menguji konfigurasi Env (tidak menimpa dengan input valid baru)
+  if (isTestingEnvConfig && cfg.hasEnvConfig && cfg.envError) {
+    const isUrlIssue = !validateSupabaseUrlDetail(cfg.envUrl).valid;
+    return {
+      isConfigured: Boolean(cfg.url && cfg.key),
+      connected: false,
+      state: isUrlIssue ? 'network_error' : 'auth_error',
+      gatewayConnected: false,
+      apiKeyValid: false,
+      apiKeyPresent,
+      apiKeyFormatValid,
+      databaseAccessible: false,
+      httpStatus: null,
+      errorCode: isUrlIssue ? 'INVALID_URL' : apiKeyPresent ? 'INVALID_KEY_FORMAT' : 'MISSING_API_KEY',
+      message: cfg.envError,
+      testedAt,
+      tablesCreated: false,
+      url: cfg.envUrl || undefined,
+      source: 'env',
+      localConflictWarning: cfg.localConflictWarning,
+    };
+  }
+
+  if (!targetUrl && !targetKey) {
     return {
       isConfigured: false,
       connected: false,
       state: 'not_configured',
       gatewayConnected: false,
       apiKeyValid: false,
+      apiKeyPresent: false,
+      apiKeyFormatValid: false,
       databaseAccessible: false,
       httpStatus: null,
       errorCode: 'NOT_CONFIGURED',
       message:
         cfg.envError ||
-        'Belum terkonfigurasi: VITE_SUPABASE_URL atau VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY belum tersedia.',
+        'Belum terkonfigurasi: VITE_SUPABASE_URL dan VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY belum tersedia.',
       testedAt,
       tablesCreated: false,
-      source: cfg.source,
+      source: effectiveSource,
+      localConflictWarning: cfg.localConflictWarning,
     };
   }
 
   const urlCheck = validateSupabaseUrlDetail(targetUrl);
   if (!urlCheck.valid) {
     return {
-      isConfigured: false,
+      isConfigured: Boolean(targetUrl && targetKey),
       connected: false,
       state: 'network_error',
       gatewayConnected: false,
       apiKeyValid: false,
+      apiKeyPresent,
+      apiKeyFormatValid,
       databaseAccessible: false,
       httpStatus: null,
       errorCode: 'INVALID_URL',
       message: urlCheck.error || 'Format URL Supabase tidak valid.',
       testedAt,
       tablesCreated: false,
-      url: targetUrl,
+      url: targetUrl || undefined,
       source: effectiveSource,
+      localConflictWarning: cfg.localConflictWarning,
     };
   }
 
-  const keyCheck = validateSupabaseKeyDetail(targetKey);
-  if (!keyCheck.valid) {
+  if (!targetKey) {
     return {
       isConfigured: false,
       connected: false,
       state: 'auth_error',
       gatewayConnected: false,
       apiKeyValid: false,
+      apiKeyPresent: false,
+      apiKeyFormatValid: false,
+      databaseAccessible: false,
+      httpStatus: null,
+      errorCode: 'MISSING_API_KEY',
+      message:
+        cfg.envError ||
+        'API Key Supabase (VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY) belum tersedia.',
+      testedAt,
+      tablesCreated: false,
+      url: urlCheck.normalizedUrl,
+      source: effectiveSource,
+      localConflictWarning: cfg.localConflictWarning,
+    };
+  }
+
+  if (!keyCheck.valid) {
+    return {
+      isConfigured: true,
+      connected: false,
+      state: 'auth_error',
+      gatewayConnected: false,
+      apiKeyValid: false,
+      apiKeyPresent: true,
+      apiKeyFormatValid: false,
       databaseAccessible: false,
       httpStatus: null,
       errorCode: 'INVALID_KEY_FORMAT',
@@ -685,6 +885,7 @@ export const testSupabaseConnection = async (
       tablesCreated: false,
       url: urlCheck.normalizedUrl,
       source: effectiveSource,
+      localConflictWarning: cfg.localConflictWarning,
     };
   }
 
@@ -693,7 +894,7 @@ export const testSupabaseConnection = async (
     urlCheck.normalizedUrl === cfg.url &&
     targetKey === cfg.key;
 
-  const resolvedSource = matchesActiveConfig || !hasCustomInput ? cfg.source : 'localStorage';
+  const resolvedSource = isTestingEnvConfig && cfg.hasEnvConfig ? 'env' : matchesActiveConfig ? cfg.source : effectiveSource;
 
   try {
     // =========================================================================
@@ -708,19 +909,24 @@ export const testSupabaseConnection = async (
 
     if (!gatewayResponse.ok) {
       const gatewayBody = await parseSafeErrorBody(gatewayResponse);
-      return interpretRestError(
-        {
-          message: gatewayBody.message || gatewayResponse.statusText || `HTTP ${gatewayResponse.status}`,
-          code: gatewayBody.code,
-          status: gatewayResponse.status,
-          stage: 'gateway',
-          gatewayConnected: gatewayResponse.status < 502,
-          apiKeyValid: false,
-        },
-        urlCheck.normalizedUrl,
-        resolvedSource,
-        testedAt
-      );
+      return {
+        ...interpretRestError(
+          {
+            message: gatewayBody.message || gatewayResponse.statusText || `HTTP ${gatewayResponse.status}`,
+            code: gatewayBody.code,
+            status: gatewayResponse.status,
+            stage: 'gateway',
+            gatewayConnected: gatewayResponse.status < 502,
+            apiKeyValid: false,
+          },
+          urlCheck.normalizedUrl,
+          resolvedSource,
+          testedAt
+        ),
+        apiKeyPresent: true,
+        apiKeyFormatValid: true,
+        localConflictWarning: cfg.localConflictWarning,
+      };
     }
 
     // =========================================================================
@@ -735,6 +941,8 @@ export const testSupabaseConnection = async (
           state: 'unknown_error',
           gatewayConnected: true,
           apiKeyValid: true,
+          apiKeyPresent: true,
+          apiKeyFormatValid: true,
           databaseAccessible: false,
           httpStatus: null,
           errorCode: 'CLIENT_INIT_FAILED',
@@ -743,6 +951,7 @@ export const testSupabaseConnection = async (
           tablesCreated: false,
           url: urlCheck.normalizedUrl,
           source: resolvedSource,
+          localConflictWarning: cfg.localConflictWarning,
         };
       }
 
@@ -752,22 +961,32 @@ export const testSupabaseConnection = async (
         .limit(1);
 
       if (!tableError) {
-        return interpretRestError(null, urlCheck.normalizedUrl, resolvedSource, testedAt);
+        return {
+          ...interpretRestError(null, urlCheck.normalizedUrl, resolvedSource, testedAt),
+          apiKeyPresent: true,
+          apiKeyFormatValid: true,
+          localConflictWarning: cfg.localConflictWarning,
+        };
       }
 
-      return interpretRestError(
-        {
-          message: tableError.message,
-          code: tableError.code,
-          status,
-          stage: 'database',
-          gatewayConnected: true,
-          apiKeyValid: true,
-        },
-        urlCheck.normalizedUrl,
-        resolvedSource,
-        testedAt
-      );
+      return {
+        ...interpretRestError(
+          {
+            message: tableError.message,
+            code: tableError.code,
+            status,
+            stage: 'database',
+            gatewayConnected: true,
+            apiKeyValid: true,
+          },
+          urlCheck.normalizedUrl,
+          resolvedSource,
+          testedAt
+        ),
+        apiKeyPresent: true,
+        apiKeyFormatValid: true,
+        localConflictWarning: cfg.localConflictWarning,
+      };
     }
 
     // Jika Admin menguji kredensial sementara di form Pengaturan sebelum disimpan,
@@ -781,35 +1000,50 @@ export const testSupabaseConnection = async (
     );
 
     if (dbResponse.ok) {
-      return interpretRestError(null, urlCheck.normalizedUrl, 'localStorage', testedAt);
+      return {
+        ...interpretRestError(null, urlCheck.normalizedUrl, resolvedSource, testedAt),
+        apiKeyPresent: true,
+        apiKeyFormatValid: true,
+        localConflictWarning: cfg.localConflictWarning,
+      };
     }
 
     const dbBody = await parseSafeErrorBody(dbResponse);
-    return interpretRestError(
-      {
-        message: dbBody.message || dbResponse.statusText || `HTTP ${dbResponse.status}`,
-        code: dbBody.code,
-        status: dbResponse.status,
-        stage: 'database',
-        gatewayConnected: true,
-        apiKeyValid: true,
-      },
-      urlCheck.normalizedUrl,
-      'localStorage',
-      testedAt
-    );
+    return {
+      ...interpretRestError(
+        {
+          message: dbBody.message || dbResponse.statusText || `HTTP ${dbResponse.status}`,
+          code: dbBody.code,
+          status: dbResponse.status,
+          stage: 'database',
+          gatewayConnected: true,
+          apiKeyValid: true,
+        },
+        urlCheck.normalizedUrl,
+        resolvedSource,
+        testedAt
+      ),
+      apiKeyPresent: true,
+      apiKeyFormatValid: true,
+      localConflictWarning: cfg.localConflictWarning,
+    };
   } catch (err: any) {
-    return interpretRestError(
-      {
-        message: err?.message || 'Failed to fetch',
-        code: 'NETWORK_ERROR',
-        status: null,
-        stage: 'gateway',
-      },
-      urlCheck.normalizedUrl,
-      resolvedSource,
-      testedAt
-    );
+    return {
+      ...interpretRestError(
+        {
+          message: err?.message || 'Failed to fetch',
+          code: 'NETWORK_ERROR',
+          status: null,
+          stage: 'gateway',
+        },
+        urlCheck.normalizedUrl,
+        resolvedSource,
+        testedAt
+      ),
+      apiKeyPresent: true,
+      apiKeyFormatValid: true,
+      localConflictWarning: cfg.localConflictWarning,
+    };
   }
 };
 
