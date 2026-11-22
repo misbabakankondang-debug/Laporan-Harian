@@ -225,6 +225,7 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
       }
 
       let userId = '';
+      let confirmedEmailAt: string | null = null;
 
       if (isContinuingProfile) {
         // 5a. Mode "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)":
@@ -266,6 +267,26 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
         }
 
         userId = verifiedAuth.user.id;
+        confirmedEmailAt = verifiedAuth.user.email_confirmed_at || null;
+
+        // Konfirmasi email otomatis sebelum menyimpan profil apabila akun Auth belum terkonfirmasi
+        if (!confirmedEmailAt) {
+          const { data: confirmedAuth, error: confirmErr } =
+            await supabaseAdmin.auth.admin.updateUserById(userId, {
+              email_confirm: true,
+            });
+
+          if (confirmErr || !confirmedAuth?.user?.email_confirmed_at) {
+            return res.status(500).json({
+              error: `Akun Auth ditemukan (UUID: ${userId}), namun gagal mengonfirmasi email secara otomatis: ${confirmErr?.message || 'email_confirmed_at masih kosong'}.`,
+              partialAuthSuccess: true,
+              pendingAuthUserId: userId,
+              code: 'AUTH_EMAIL_CONFIRM_FAILED',
+            });
+          }
+
+          confirmedEmailAt = confirmedAuth.user.email_confirmed_at;
+        }
       } else {
         // 5b. Mode Buat Pengguna Baru:
         // Cek terlebih dahulu di Supabase Auth agar tidak membuat akun Auth ganda
@@ -330,6 +351,26 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
         }
 
         userId = authData.user.id;
+        confirmedEmailAt = authData.user.email_confirmed_at || null;
+
+        // Pastikan akun baru berstatus email terkonfirmasi sebelum menyimpan profil
+        if (!confirmedEmailAt) {
+          const { data: confirmedAuth, error: confirmErr } =
+            await supabaseAdmin.auth.admin.updateUserById(userId, {
+              email_confirm: true,
+            });
+
+          if (confirmErr || !confirmedAuth?.user?.email_confirmed_at) {
+            return res.status(500).json({
+              error: `Akun Auth sudah dibuat (UUID: ${userId}), namun gagal mengonfirmasi email secara otomatis: ${confirmErr?.message || 'email_confirmed_at masih kosong'}. Klik "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)" untuk mencoba ulang konfirmasi dan simpan profil.`,
+              partialAuthSuccess: true,
+              pendingAuthUserId: userId,
+              code: 'AUTH_EMAIL_CONFIRM_FAILED',
+            });
+          }
+
+          confirmedEmailAt = confirmedAuth.user.email_confirmed_at;
+        }
       }
 
       const initials =
@@ -392,9 +433,11 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
 
       return res.status(200).json({
         success: true,
+        emailConfirmed: Boolean(confirmedEmailAt),
+        emailConfirmedAt: confirmedEmailAt,
         message: isContinuingProfile
-          ? `Profil untuk ${normalizedName} (${normalizedRole}) berhasil disimpan dengan UUID Auth ${userId}.`
-          : `Akun dan profil untuk ${normalizedName} (${normalizedRole}) berhasil dibuat dan disimpan.`,
+          ? `Email akun terkonfirmasi dan profil untuk ${normalizedName} (${normalizedRole}) berhasil disimpan dengan UUID Auth ${userId}.`
+          : `Akun dan profil untuk ${normalizedName} (${normalizedRole}) berhasil dibuat, terkonfirmasi, dan disimpan.`,
         user: savedProfile || profileRow,
       });
     } catch (err: any) {
