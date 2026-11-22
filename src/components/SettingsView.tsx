@@ -127,7 +127,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
   const [copiedUserPortalLink, setCopiedUserPortalLink] = useState(false);
-  const [copiedAdminPortalLink, setCopiedAdminPortalLink] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [testFeedback, setTestFeedback] = useState<SupabaseConnectionStatus | null>(null);
 
@@ -174,20 +173,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const kopLogoInputRef = useRef<HTMLInputElement>(null);
   const backgroundHeroInputRef = useRef<HTMLInputElement>(null);
 
-  // Portal URLs
-  const userPortalUrl = useMemo(() => {
+  // Official App Login URL
+  const appLoginUrl = useMemo(() => {
     try {
-      return `${window.location.origin}${window.location.pathname}?portal=user`;
+      return `${window.location.origin}${window.location.pathname}`;
     } catch {
-      return '?portal=user';
-    }
-  }, []);
-
-  const adminPortalUrl = useMemo(() => {
-    try {
-      return `${window.location.origin}${window.location.pathname}?portal=admin`;
-    } catch {
-      return '?portal=admin';
+      return '/';
     }
   }, []);
 
@@ -550,7 +541,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             )}
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Kelola profil pelapor, tautan portal login, upload background landscape hero, logo kop surat, integrasi Supabase, dan data pengguna.
+            Kelola profil pelapor, tautan akses SIBAHAR (Sistem Informasi Berita Aktual Harian), upload background landscape hero, logo kop surat, integrasi Supabase, dan data pengguna.
           </p>
         </div>
 
@@ -628,95 +619,40 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       )}
 
-      {/* Tautan Khusus Portal Login SIBAHAR (Admin View) */}
+      {/* Tautan Resmi Login Aplikasi SIBAHAR (Admin View) */}
       {isAdmin && (
-        <div className="bg-gradient-to-r from-emerald-900 via-emerald-950 to-slate-900 text-white p-5 rounded-2xl border border-emerald-800 shadow-md space-y-3.5">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <LinkIcon className="w-5 h-5 text-amber-300" />
-              <div>
-                <h3 className="text-sm font-bold text-white">
-                  Tautan Portal Login SIBAHAR (Khusus Pengguna vs Administrator)
-                </h3>
-                <p className="text-xs text-emerald-200">
-                  Bagikan tautan khusus pengguna kepada staf atau gunakan tautan admin untuk mengelola sistem.
-                </p>
-              </div>
+        <div className="bg-gradient-to-r from-emerald-900 via-emerald-950 to-slate-900 text-white p-5 rounded-2xl border border-emerald-800 shadow-md space-y-3">
+          <div className="flex items-center gap-2">
+            <LinkIcon className="w-5 h-5 text-amber-300" />
+            <div>
+              <h3 className="text-sm font-bold text-white">
+                Tautan Akses Aplikasi SIBAHAR (Login Supabase Auth)
+              </h3>
+              <p className="text-xs text-emerald-200">
+                Seluruh pengguna (Admin, Kepala Sekolah, Guru, Wali Asrama, Wali Asuh, dan Tenaga Keamanan) login melalui halaman utama dengan email dan kata sandi resmi.
+              </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-            {/* 1. Link Khusus Pengguna / Staf */}
-            <div className="bg-white/10 backdrop-blur-md p-3.5 rounded-xl border border-white/15 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-emerald-200 flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-emerald-300" />
-                  <span>1. Link Khusus Pengguna / Staf</span>
-                </span>
-                <span className="text-[10px] font-mono bg-emerald-500/30 text-emerald-100 px-2 py-0.5 rounded">
-                  ?portal=user
-                </span>
-              </div>
-              <p className="text-[11px] text-emerald-100/90 leading-tight">
-                Untuk Wali Asrama, Wali Asuh, Guru, Tenaga Keamanan, dan Kepala Sekolah:
-              </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={userPortalUrl}
-                  className="flex-1 bg-black/30 border border-white/20 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-emerald-200 select-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(userPortalUrl);
-                    setCopiedUserPortalLink(true);
-                    setTimeout(() => setCopiedUserPortalLink(false), 2500);
-                  }}
-                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
-                >
-                  {copiedUserPortalLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedUserPortalLink ? 'Tersalin' : 'Salin'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 2. Link Khusus Administrator */}
-            <div className="bg-white/10 backdrop-blur-md p-3.5 rounded-xl border border-white/15 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-amber-300" />
-                  <span>2. Link Khusus Administrator (Saat Ini)</span>
-                </span>
-                <span className="text-[10px] font-mono bg-amber-400/20 text-amber-200 px-2 py-0.5 rounded">
-                  ?portal=admin
-                </span>
-              </div>
-              <p className="text-[11px] text-emerald-100/90 leading-tight">
-                Tautan default yang Anda gunakan saat ini untuk akses penuh Administrator:
-              </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={adminPortalUrl}
-                  className="flex-1 bg-black/30 border border-white/20 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-amber-200 select-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(adminPortalUrl);
-                    setCopiedAdminPortalLink(true);
-                    setTimeout(() => setCopiedAdminPortalLink(false), 2500);
-                  }}
-                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 rounded-lg text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
-                >
-                  {copiedAdminPortalLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedAdminPortalLink ? 'Tersalin' : 'Salin'}</span>
-                </button>
-              </div>
-            </div>
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="text"
+              readOnly
+              value={appLoginUrl}
+              className="flex-1 bg-black/30 border border-white/20 rounded-lg px-3 py-1.5 text-xs font-mono text-emerald-200 select-all"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(appLoginUrl);
+                setCopiedUserPortalLink(true);
+                setTimeout(() => setCopiedUserPortalLink(false), 2500);
+              }}
+              className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+            >
+              {copiedUserPortalLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedUserPortalLink ? 'Tersalin' : 'Salin Tautan'}</span>
+            </button>
           </div>
         </div>
       )}

@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import { UserProfile, UserRole, USER_ROLES } from '../types/report';
-import { DEFAULT_ROLE_USERS, CANONICAL_ROLE_USERS } from '../data/initialData';
 import {
   getSupabaseClient,
   getSupabaseConfig,
@@ -26,12 +25,40 @@ export const generateUuid = (): string => {
   });
 };
 
+const ALLOWED_APP_ROLES = new Set<string>([
+  'admin',
+  'wali_asrama',
+  'wali_asuh',
+  'guru',
+  'tenaga_keamanan',
+  'kepala_sekolah',
+  'keamanan',
+]);
+
+export const isValidAppRole = (role?: string | null): boolean => {
+  if (!role || typeof role !== 'string') return false;
+  return ALLOWED_APP_ROLES.has(role.trim().toLowerCase());
+};
+
 export const normalizeUserRole = (role?: string | null): UserRole => {
   if (!role) return 'guru';
-  const cleaned = String(role).trim();
+  const cleaned = String(role).trim().toLowerCase();
   if (cleaned === 'keamanan') return 'tenaga_keamanan';
   if (cleaned in USER_ROLES) return cleaned as UserRole;
   return 'guru';
+};
+
+export const EMPTY_UNAUTHENTICATED_USER: UserProfile = {
+  id: '',
+  name: '',
+  nip: '',
+  email: '',
+  phone: '',
+  department: 'Sekolah Rakyat Terintegerasi 1 Sumedang',
+  role: '',
+  roleKey: 'guru',
+  avatarInitials: '',
+  isActive: false,
 };
 
 export const computeAvatarInitials = (name?: string | null, fallback = 'SR'): string => {
@@ -220,17 +247,16 @@ export const mapDbProfileToUserProfile = (rp: any): UserProfile => {
   };
 };
 
-// Menggabungkan data authoritative dari Supabase `profiles` dengan state lokal:
-// - Data Supabase selalu menjadi sumber utama (tidak pernah ditimpa cache lokal).
-// - Record dengan UUID asli yang sudah hilang dari Supabase tidak dimunculkan ulang.
+// Menggabungkan data authoritative dari Supabase `profiles`:
+// - Data Supabase selalu menjadi sumber utama dan tidak pernah mengembalikan akun statis bawaan.
 // - Dua atau lebih pengguna dengan role sama tetap menjadi entitas terpisah berdasarkan ID/email.
 export const mergeRemoteProfilesWithLocal = (
   remoteRows: any[],
-  localUsers: UserProfile[],
+  _localUsers: UserProfile[],
   deletedSet = getDeletedUsersSet()
 ): UserProfile[] => {
   const remoteProfiles = (remoteRows || [])
-    .filter((rp) => rp && (rp.id || rp.email) && rp.is_active !== false)
+    .filter((rp) => rp && rp.id && rp.is_active === true && isValidAppRole(rp.role))
     .map(mapDbProfileToUserProfile)
     .filter((u) => {
       const idLower = (u.id || '').toLowerCase();
@@ -238,28 +264,180 @@ export const mergeRemoteProfilesWithLocal = (
       return !deletedSet.has(idLower) && !deletedSet.has(emailLower);
     });
 
-  if (remoteProfiles.length === 0) {
-    return deduplicateUsersByIdentity(localUsers, deletedSet);
+  return deduplicateUsersByIdentity(remoteProfiles, deletedSet);
+};
+
+export interface ProfileSessionVerificationResult {
+  ok: boolean;
+  user?: UserProfile;
+  reason?: 'no_session' | 'missing_profile' | 'id_mismatch' | 'inactive' | 'invalid_role' | 'db_error';
+  error?: string;
+}
+
+export const verifySupabaseProfileSession = async (
+  client: any,
+  session: any
+): Promise<ProfileSessionVerificationResult> => {
+  const authUserId = session?.user?.id ? String(session.user.id).trim() : '';
+  const accessToken = session?.access_token ? String(session.access_token).trim() : '';
+
+  if (!client || !authUserId || !accessToken) {
+    return {
+      ok: false,
+      reason: 'no_session',
+      error: 'Sesi autentikasi Supabase tidak valid.',
+    };
   }
 
-  const remoteEmails = new Set(remoteProfiles.map((u) => u.email.toLowerCase()).filter(Boolean));
-  const canonicalEmails = new Set(CANONICAL_ROLE_USERS.map((c) => c.email.toLowerCase()));
+  try {
+    const { data: profile, error: profileErr } = await client
+      .from('profiles')
+      .select('*')
+      .eq('id', authUserId)
+      .maybeSingle();
 
-  // Pertahankan akun lokal non-UUID (misal akun bawaan/offline sebelum sync) yang tidak bentrok email dan tidak dihapus
-  const preservedLocalOnly = localUsers
-    .map(migrateSingleLegacyUser)
-    .filter((u) => {
-      const idLower = (u.id || '').toLowerCase();
-      const emailLower = u.email.toLowerCase();
-      if (deletedSet.has(idLower) || deletedSet.has(emailLower)) return false;
-      if (remoteEmails.has(emailLower)) return false;
-      // Jika user lokal memiliki UUID asli tetapi sudah tidak ada di Supabase remoteProfiles, berarti telah dihapus di DB
-      if (isUuid(u.id)) return false;
-      // Akun canonical bawaan (id: usr-...) atau akun lokal offline tetap tersedia jika tidak dihapus
-      return canonicalEmails.has(emailLower) || (u.id || '').startsWith('local-');
+    if (profileErr) {
+      return {
+        ok: false,
+        reason: 'db_error',
+        error: `Gagal memverifikasi profil pengguna di Supabase: ${profileErr.message}`,
+      };
+    }
+
+    if (!profile) {
+      await client.auth.signOut().catch(() => {});
+      return {
+        ok: false,
+        reason: 'missing_profile',
+        error: 'Profil pengguna belum terdaftar pada database SIBAHAR. Hubungi Administrator.',
+      };
+    }
+
+    if (String(profile.id || '').trim().toLowerCase() !== authUserId.toLowerCase()) {
+      await client.auth.signOut().catch(() => {});
+      return {
+        ok: false,
+        reason: 'id_mismatch',
+        error: 'Identitas profil tidak cocok dengan sesi autentikasi Supabase.',
+      };
+    }
+
+    if (profile.is_active !== true) {
+      await client.auth.signOut().catch(() => {});
+      return {
+        ok: false,
+        reason: 'inactive',
+        error: 'Akun Anda berstatus nonaktif. Hubungi Administrator SIBAHAR.',
+      };
+    }
+
+    if (!isValidAppRole(profile.role)) {
+      await client.auth.signOut().catch(() => {});
+      return {
+        ok: false,
+        reason: 'invalid_role',
+        error: 'Role akun tidak valid pada sistem SIBAHAR. Hubungi Administrator.',
+      };
+    }
+
+    return {
+      ok: true,
+      user: mapDbProfileToUserProfile(profile),
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      reason: 'db_error',
+      error: err?.message || 'Gagal memverifikasi profil pengguna ke Supabase.',
+    };
+  }
+};
+
+export interface AuthExecutionResult {
+  success: boolean;
+  user?: UserProfile;
+  error?: string;
+}
+
+export const restoreSupabaseSession = async (client: any): Promise<AuthExecutionResult> => {
+  if (!client) {
+    return { success: false };
+  }
+  try {
+    const { data: sessionData, error: sessionErr } = await client.auth.getSession();
+    if (sessionErr || !sessionData?.session?.access_token || !sessionData?.session?.user?.id) {
+      return { success: false };
+    }
+    const verification = await verifySupabaseProfileSession(client, sessionData.session);
+    if (verification.ok && verification.user) {
+      return { success: true, user: verification.user };
+    }
+    return { success: false, error: verification.error };
+  } catch {
+    return { success: false };
+  }
+};
+
+export const authenticateWithSupabaseEmail = async (
+  client: any,
+  email: string,
+  pass: string
+): Promise<AuthExecutionResult> => {
+  const cleanedEmail = email.trim().toLowerCase();
+  if (!cleanedEmail || !pass) {
+    return { success: false, error: 'Email dan kata sandi wajib diisi.' };
+  }
+  if (!client) {
+    return {
+      success: false,
+      error: 'Konfigurasi Supabase belum tersedia. Aplikasi tidak dapat melakukan autentikasi.',
+    };
+  }
+
+  try {
+    const { data, error } = await client.auth.signInWithPassword({
+      email: cleanedEmail,
+      password: pass,
     });
 
-  return deduplicateUsersByIdentity([...remoteProfiles, ...preservedLocalOnly], deletedSet);
+    if (error) {
+      const rawMsg = String(error.message || '');
+      const lower = rawMsg.toLowerCase();
+      const friendlyMsg =
+        lower.includes('invalid login credentials')
+          ? 'Email atau kata sandi tidak valid.'
+          : lower.includes('email not confirmed')
+          ? 'Email akun belum dikonfirmasi. Hubungi Administrator SIBAHAR.'
+          : lower.includes('failed to fetch') || lower.includes('network')
+          ? 'Gagal terhubung ke server autentikasi Supabase. Periksa koneksi internet Anda.'
+          : rawMsg || 'Autentikasi Supabase ditolak.';
+      return { success: false, error: friendlyMsg };
+    }
+
+    if (!data?.session || !data?.user?.id) {
+      await client.auth.signOut().catch(() => {});
+      return { success: false, error: 'Sesi autentikasi Supabase tidak valid.' };
+    }
+
+    const verification = await verifySupabaseProfileSession(client, data.session);
+    if (!verification.ok || !verification.user) {
+      return {
+        success: false,
+        error: verification.error || 'Profil pengguna tidak valid atau berstatus nonaktif.',
+      };
+    }
+
+    return { success: true, user: verification.user };
+  } catch (err: any) {
+    const errMsg = String(err?.message || err || '');
+    const isFetch = errMsg.toLowerCase().includes('failed to fetch') || errMsg.toLowerCase().includes('network');
+    return {
+      success: false,
+      error: isFetch
+        ? 'Gagal menghubungi server autentikasi Supabase. Periksa koneksi internet Anda.'
+        : errMsg || 'Terjadi kesalahan saat melakukan login ke Supabase.',
+    };
+  }
 };
 
 export interface UserMutationResult {
@@ -276,22 +454,16 @@ interface AuthContextType {
   currentUser: UserProfile;
   currentRole: UserRole;
   isLoggedIn: boolean;
+  isAuthLoading: boolean;
   isLoading: boolean;
+  authError: string | null;
+  clearAuthError: () => void;
   isSupabaseConnected: boolean;
   supabaseStatus: SupabaseConnectionStatus;
   checkSupabaseConnection: (customUrl?: string, customKey?: string) => Promise<SupabaseConnectionStatus>;
   refreshUsersFromSupabase: () => Promise<void>;
-  loginWithRole: (role: UserRole) => void;
-  loginWithUserProfile: (user: UserProfile) => void;
   loginWithEmail: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
-  registerWithEmail: (
-    email: string,
-    pass: string,
-    fullName: string,
-    role: UserRole,
-    nip?: string
-  ) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   updateCurrentUserProfile: (profile: Partial<UserProfile>) => void;
   allUsersList: UserProfile[];
   updateUserRoleByAdmin: (userId: string, newRole: UserRole) => Promise<UserMutationResult>;
@@ -314,39 +486,12 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
-    try {
-      const saved = localStorage.getItem('sibahar_active_user');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && (parsed.id || parsed.email || parsed.roleKey)) {
-          return migrateSingleLegacyUser(parsed);
-        }
-      }
-      return DEFAULT_ROLE_USERS.kepala_sekolah;
-    } catch {
-      return DEFAULT_ROLE_USERS.kepala_sekolah;
-    }
-  });
-
-  const [allUsersList, setAllUsersList] = useState<UserProfile[]>(() => {
-    try {
-      const saved = localStorage.getItem('sibahar_all_users');
-      const deletedSet = getDeletedUsersSet();
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return migrateUsersList(parsed, deletedSet);
-        }
-      }
-      return deduplicateUsersByIdentity(CANONICAL_ROLE_USERS, deletedSet);
-    } catch {
-      return CANONICAL_ROLE_USERS;
-    }
-  });
-
-  const [isLoggedIn, setIsLoggedIn] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
+  const [currentUser, setCurrentUser] = useState<UserProfile>(EMPTY_UNAUTHENTICATED_USER);
+  const [allUsersList, setAllUsersList] = useState<UserProfile[]>([]);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [supabaseStatus, setSupabaseStatus] = useState<SupabaseConnectionStatus>({
     isConfigured: false,
     connected: false,
@@ -378,18 +523,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const allUsersListRef = useRef<UserProfile[]>(allUsersList);
   const currentUserRef = useRef<UserProfile>(currentUser);
 
+  const clearAuthError = useCallback(() => {
+    setAuthError(null);
+  }, []);
+
   useEffect(() => {
     allUsersListRef.current = allUsersList;
-    try {
-      localStorage.setItem('sibahar_all_users', JSON.stringify(allUsersList));
-    } catch {}
   }, [allUsersList]);
 
   useEffect(() => {
     currentUserRef.current = currentUser;
-    try {
-      localStorage.setItem('sibahar_active_user', JSON.stringify(currentUser));
-    } catch {}
   }, [currentUser]);
 
   const checkSupabaseConnection = useCallback(async (customUrl?: string, customKey?: string) => {
@@ -458,36 +601,94 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, []);
 
-  // Periksa koneksi Supabase di awal, sinkronkan daftar profil, dan dengarkan perubahan realtime
+  // Verifikasi sesi Supabase Auth saat aplikasi dimuat & dengarkan perubahan sesi
   useEffect(() => {
-    checkSupabaseConnection();
-    refreshUsersFromSupabase();
+    let isMounted = true;
+
+    try {
+      localStorage.removeItem('sibahar_active_user');
+      localStorage.removeItem('sibahar_all_users');
+    } catch {}
 
     const client = getSupabaseClient();
-    if (!client) return;
+
+    const clearToLoggedOut = (errMessage: string | null = null) => {
+      if (!isMounted) return;
+      setCurrentUser(EMPTY_UNAUTHENTICATED_USER);
+      setAllUsersList([]);
+      setIsLoggedIn(false);
+      setAuthError(errMessage);
+      try {
+        localStorage.removeItem('sibahar_active_user');
+        localStorage.removeItem('sibahar_all_users');
+      } catch {}
+    };
+
+    const initializeAuthSession = async () => {
+      void checkSupabaseConnection();
+
+      if (!client) {
+        clearToLoggedOut(null);
+        if (isMounted) setIsAuthLoading(false);
+        return;
+      }
+
+      try {
+        const result = await restoreSupabaseSession(client);
+        if (!isMounted) return;
+
+        if (result.success && result.user) {
+          setCurrentUser(result.user);
+          setIsLoggedIn(true);
+          setAuthError(null);
+          void refreshUsersFromSupabase();
+        } else {
+          clearToLoggedOut(result.error || null);
+        }
+      } finally {
+        if (isMounted) {
+          setIsAuthLoading(false);
+        }
+      }
+    };
+
+    void initializeAuthSession();
+
+    if (!client) {
+      return () => {
+        isMounted = false;
+      };
+    }
 
     const {
       data: { subscription },
     } = client.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
-        checkSupabaseConnection();
-        refreshUsersFromSupabase();
+      if (!isMounted) return;
+
+      if (event === 'SIGNED_OUT' || !session?.user?.id || !session?.access_token) {
+        clearToLoggedOut(null);
+        void checkSupabaseConnection();
+        return;
       }
 
-      if (session?.user) {
-        try {
-          const { data: profile } = await client
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
+      if (
+        event === 'SIGNED_IN' ||
+        event === 'TOKEN_REFRESHED' ||
+        event === 'USER_UPDATED' ||
+        event === 'INITIAL_SESSION'
+      ) {
+        const verification = await verifySupabaseProfileSession(client, session);
+        if (!isMounted) return;
 
-          if (profile) {
-            setCurrentUser(mapDbProfileToUserProfile(profile));
-            setIsLoggedIn(true);
-          }
-        } catch (fetchErr) {
-          console.warn('Gagal memuat data profil dari Supabase (offline/network):', fetchErr);
+        if (verification.ok && verification.user) {
+          setCurrentUser(verification.user);
+          setIsLoggedIn(true);
+          setAuthError(null);
+          void checkSupabaseConnection();
+          void refreshUsersFromSupabase();
+        } else {
+          clearToLoggedOut(verification.error || null);
+          void checkSupabaseConnection();
         }
       }
     });
@@ -498,211 +699,60 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles' },
         () => {
-          refreshUsersFromSupabase();
+          void refreshUsersFromSupabase();
         }
       )
       .subscribe();
 
     return () => {
+      isMounted = false;
       subscription?.unsubscribe();
       client.removeChannel(profilesChannel);
     };
   }, [checkSupabaseConnection, refreshUsersFromSupabase]);
 
-  const loginWithRole = (role: UserRole) => {
-    const normalized = normalizeUserRole(role);
-    const user =
-      allUsersListRef.current.find((u) => normalizeUserRole(u.roleKey) === normalized) ||
-      DEFAULT_ROLE_USERS[normalized] ||
-      DEFAULT_ROLE_USERS[role];
-    if (user) {
-      setCurrentUser(migrateSingleLegacyUser(user));
-      setIsLoggedIn(true);
-    }
-  };
-
-  const loginWithUserProfile = (user: UserProfile) => {
-    setCurrentUser(migrateSingleLegacyUser(user));
-    setIsLoggedIn(true);
-  };
-
   const loginWithEmail = async (email: string, pass: string): Promise<{ success: boolean; error?: string }> => {
     setIsLoading(true);
-    const client = getSupabaseClient();
-    const cleanedEmail = email.trim().toLowerCase();
+    setAuthError(null);
 
-    if (client) {
-      try {
-        const { data, error } = await client.auth.signInWithPassword({
-          email: cleanedEmail,
-          password: pass,
-        });
+    try {
+      const client = getSupabaseClient();
+      const result = await authenticateWithSupabaseEmail(client, email, pass);
 
-        if (error) {
-          setIsLoading(false);
-          return { success: false, error: error.message };
-        }
-
-        if (data.user) {
-          const { data: profile } = await client
-            .from('profiles')
-            .select('*')
-            .eq('id', data.user.id)
-            .single();
-
-          if (profile) {
-            const mapped = mapDbProfileToUserProfile(profile);
-            setCurrentUser(mapped);
-            setIsLoggedIn(true);
-            refreshUsersFromSupabase();
-            setIsLoading(false);
-            return { success: true };
-          }
-        }
-      } catch (err: any) {
-        console.warn('Supabase login network warning:', err);
-        const errMsg = String(err?.message || err);
-        const isFetch = errMsg.toLowerCase().includes('failed to fetch') || errMsg.toLowerCase().includes('network');
-
-        const matchOffline = Object.values(DEFAULT_ROLE_USERS).find(
-          (u) => u.email.toLowerCase() === cleanedEmail
-        );
-        if (matchOffline) {
-          setCurrentUser(matchOffline);
-          setIsLoggedIn(true);
-          setIsLoading(false);
-          return { success: true };
-        }
-
-        setIsLoading(false);
-        return {
-          success: false,
-          error: isFetch
-            ? 'Koneksi jaringan ke Supabase gagal (Failed to fetch). Periksa koneksi internet atau gunakan tombol pilih akun cepat di bawah.'
-            : errMsg || 'Gagal login ke Supabase',
-        };
+      if (!result.success || !result.user) {
+        const msg = result.error || 'Email atau kata sandi tidak valid.';
+        setIsLoggedIn(false);
+        setCurrentUser(EMPTY_UNAUTHENTICATED_USER);
+        setAllUsersList([]);
+        setAuthError(msg);
+        return { success: false, error: msg };
       }
-    }
 
-    const match = allUsersListRef.current.find((u) => u.email.toLowerCase() === cleanedEmail) ||
-      Object.values(DEFAULT_ROLE_USERS).find((u) => u.email.toLowerCase() === cleanedEmail);
-
-    if (match) {
-      setCurrentUser(migrateSingleLegacyUser(match));
+      setCurrentUser(result.user);
       setIsLoggedIn(true);
-      setIsLoading(false);
+      setAuthError(null);
+      void checkSupabaseConnection();
+      void refreshUsersFromSupabase();
       return { success: true };
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
-    return { success: false, error: 'Email atau kata sandi tidak cocok. Gunakan tombol pilih akun cepat di bawah.' };
-  };
-
-  const registerWithEmail = async (
-    email: string,
-    pass: string,
-    fullName: string,
-    role: UserRole,
-    nip?: string
-  ): Promise<{ success: boolean; error?: string }> => {
-    setIsLoading(true);
-    const client = getSupabaseClient();
-    const normalizedRole = normalizeUserRole(role);
-    const cleanedEmail = email.trim().toLowerCase();
-    const cleanedName = fullName.trim();
-    const initials = computeAvatarInitials(cleanedName);
-
-    if (client) {
-      try {
-        const { data, error } = await client.auth.signUp({
-          email: cleanedEmail,
-          password: pass,
-          options: {
-            data: {
-              full_name: cleanedName,
-              role: normalizedRole,
-              nip: nip?.trim() || '-',
-              department: 'Sekolah Rakyat Terintegerasi 1 Sumedang',
-            },
-          },
-        });
-
-        if (error) {
-          setIsLoading(false);
-          return { success: false, error: error.message };
-        }
-
-        if (data.user) {
-          const profileRow = {
-            id: data.user.id,
-            full_name: cleanedName,
-            email: cleanedEmail,
-            role: normalizedRole,
-            nip: nip?.trim() || '-',
-            phone: '',
-            department: 'Sekolah Rakyat Terintegerasi 1 Sumedang',
-            avatar_initials: initials,
-            is_active: true,
-            updated_at: new Date().toISOString(),
-          };
-
-          const { error: profErr } = await client
-            .from('profiles')
-            .upsert(profileRow, { onConflict: 'id' });
-
-          if (profErr) {
-            console.warn('Supabase profile upsert after signUp warning:', profErr.message);
-          }
-
-          const newProfile: UserProfile = {
-            id: data.user.id,
-            name: cleanedName,
-            email: cleanedEmail,
-            nip: nip?.trim() || '-',
-            phone: '',
-            department: 'Sekolah Rakyat Terintegerasi 1 Sumedang',
-            role: USER_ROLES[normalizedRole]?.label || normalizedRole,
-            roleKey: normalizedRole,
-            avatarInitials: initials,
-            isActive: true,
-          };
-          setCurrentUser(newProfile);
-          setAllUsersList((prev) => deduplicateUsersByIdentity([...prev, newProfile], getDeletedUsersSet()));
-          setIsLoggedIn(true);
-          setIsLoading(false);
-          return { success: true };
-        }
-      } catch (err: any) {
-        setIsLoading(false);
-        return { success: false, error: err.message };
-      }
-    }
-
-    const newProfile: UserProfile = {
-      id: 'local-' + generateUuid(),
-      name: cleanedName,
-      email: cleanedEmail,
-      nip: nip?.trim() || '-',
-      phone: '',
-      department: 'Sekolah Rakyat Terintegerasi 1 Sumedang',
-      role: USER_ROLES[normalizedRole]?.label || normalizedRole,
-      roleKey: normalizedRole,
-      avatarInitials: initials,
-      isActive: true,
-    };
-    setCurrentUser(newProfile);
-    setAllUsersList((prev) => deduplicateUsersByIdentity([...prev, newProfile], getDeletedUsersSet()));
-    setIsLoggedIn(true);
-    setIsLoading(false);
-    return { success: true };
   };
 
   const logout = async () => {
     const client = getSupabaseClient();
-    if (client) {
-      await client.auth.signOut();
-    }
     setIsLoggedIn(false);
+    setCurrentUser(EMPTY_UNAUTHENTICATED_USER);
+    setAllUsersList([]);
+    setAuthError(null);
+    try {
+      localStorage.removeItem('sibahar_active_user');
+      localStorage.removeItem('sibahar_all_users');
+    } catch {}
+    if (client) {
+      await client.auth.signOut().catch(() => {});
+    }
+    void checkSupabaseConnection();
   };
 
   const updateCurrentUserProfile = (updates: Partial<UserProfile>) => {
@@ -1112,25 +1162,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return { success: true, user: createdProfile };
     }
 
-    // Mode offline / lokal tanpa konfigurasi Supabase
-    const localUser: UserProfile = {
-      id: 'local-' + generateUuid(),
-      name: cleanedName,
-      email: cleanedEmail,
-      nip: cleanedNip,
-      phone: cleanedPhone,
-      department: cleanedDept,
-      role: USER_ROLES[normalizedRole]?.label || normalizedRole,
-      roleKey: normalizedRole,
-      avatarInitials: initials,
-      isActive: true,
+    return {
+      success: false,
+      error: 'Konfigurasi Supabase belum aktif. Pembuatan pengguna wajib terhubung ke Supabase.',
     };
-
-    removeFromDeletedUsersSet(cleanedEmail);
-    setAllUsersList((prev) =>
-      deduplicateUsersByIdentity([...prev, localUser], getDeletedUsersSet())
-    );
-    return { success: true, user: localUser };
   };
 
   // 2. Ubah Data Pengguna oleh Admin (identifikasi ketat per ID/email, menunggu konfirmasi Supabase)
@@ -1440,17 +1475,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     <AuthContext.Provider
       value={{
         currentUser,
-        currentRole: normalizeUserRole(currentUser.roleKey || 'kepala_sekolah'),
+        currentRole: normalizeUserRole(currentUser.roleKey || 'guru'),
         isLoggedIn,
+        isAuthLoading,
         isLoading,
+        authError,
+        clearAuthError,
         isSupabaseConnected,
         supabaseStatus,
         checkSupabaseConnection,
         refreshUsersFromSupabase,
-        loginWithRole,
-        loginWithUserProfile,
         loginWithEmail,
-        registerWithEmail,
         logout,
         updateCurrentUserProfile,
         allUsersList,

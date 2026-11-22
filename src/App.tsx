@@ -19,10 +19,10 @@ import {
 } from './types/report';
 import { 
   initialReports, 
-  initialProfile, 
   initialSettings, 
   initialNotifications 
 } from './data/initialData';
+import { KemensosLogo } from './components/KemensosLogo';
 import { 
   getSupabaseClient, 
   mapDbReportToReportItem, 
@@ -35,27 +35,12 @@ function SIBAHARAppContent() {
     currentUser, 
     currentRole, 
     isLoggedIn, 
+    isAuthLoading,
     isSupabaseConnected, 
     updateCurrentUserProfile 
   } = useAuth();
 
-  // Local storage persistence (Requirement: Hapus Semua Laporan yang ada sehingga menjadi kosong semua)
-  const [reports, setReports] = useState<ReportItem[]>(() => {
-    try {
-      const isCleared = localStorage.getItem('sibahar_empty_initialized_v2');
-      if (isCleared === 'true') {
-        const saved = localStorage.getItem('sibahar_items');
-        return saved ? JSON.parse(saved) : [];
-      }
-      // Initialize as clean empty slate
-      localStorage.setItem('sibahar_empty_initialized_v2', 'true');
-      localStorage.setItem('sibahar_items', JSON.stringify([]));
-      localStorage.removeItem('reporthub_items');
-      return [];
-    } catch {
-      return [];
-    }
-  });
+  const [reports, setReports] = useState<ReportItem[]>([]);
 
   const [appSettings, setAppSettings] = useState<AppSettings>(() => {
     try {
@@ -96,21 +81,50 @@ function SIBAHARAppContent() {
   const [selectedReportForDetail, setSelectedReportForDetail] = useState<ReportItem | null>(null);
   const [isOpenMobileSidebar, setIsOpenMobileSidebar] = useState(false);
 
-  // Sync with localStorage
+  // Sync with localStorage only while authenticated
   useEffect(() => {
+    if (!isLoggedIn) return;
     localStorage.setItem('sibahar_items', JSON.stringify(reports));
-  }, [reports]);
+  }, [reports, isLoggedIn]);
+
+  // Sinkronkan judul browser resmi SIBAHAR
+  useEffect(() => {
+    try {
+      document.title = 'SIBAHAR - Sistem Informasi Berita Aktual Harian';
+    } catch {}
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('sibahar_settings', JSON.stringify(appSettings));
   }, [appSettings]);
 
   useEffect(() => {
+    if (!isLoggedIn) return;
     localStorage.setItem('sibahar_notifs', JSON.stringify(notifications));
-  }, [notifications]);
+  }, [notifications, isLoggedIn]);
 
-  // Sync with Supabase Database and listen to Realtime changes
+  // Bersihkan state sensitif & arahkan kembali ke halaman login saat belum terotentikasi / logout
   useEffect(() => {
+    if (isAuthLoading) return;
+    if (!isLoggedIn) {
+      setReports([]);
+      setSelectedReportForDetail(null);
+      setCurrentTab('dashboard');
+      setHistoryStatusFilter('all');
+      setIsOpenMobileSidebar(false);
+      try {
+        localStorage.removeItem('sibahar_items');
+        localStorage.removeItem('sibahar_active_user');
+        if (window.location.pathname !== '/' || window.location.search.includes('portal=')) {
+          window.history.replaceState({}, '', '/');
+        }
+      } catch {}
+    }
+  }, [isAuthLoading, isLoggedIn]);
+
+  // Sync with Supabase Database and listen to Realtime changes (HANYA setelah autentikasi Supabase terverifikasi)
+  useEffect(() => {
+    if (isAuthLoading || !isLoggedIn) return;
     const client = getSupabaseClient();
     if (!client || !isSupabaseConnected) return;
 
@@ -123,10 +137,8 @@ function SIBAHARAppContent() {
           .order('created_at', { ascending: false });
 
         if (!error && data && isMounted) {
-          if (data.length > 0) {
-            const mapped = data.map(mapDbReportToReportItem);
-            setReports(mapped);
-          }
+          const mapped = data.map(mapDbReportToReportItem);
+          setReports(mapped);
         }
       } catch (err) {
         console.warn('Gagal memuat data dari Supabase:', err);
@@ -187,7 +199,7 @@ function SIBAHARAppContent() {
       isMounted = false;
       client.removeChannel(channel);
     };
-  }, [isSupabaseConnected]);
+  }, [isAuthLoading, isLoggedIn, isSupabaseConnected]);
 
   // Keep selectedReportForDetail in sync with updated report items
   useEffect(() => {
@@ -708,9 +720,8 @@ function SIBAHARAppContent() {
   };
 
   const handleResetToDefault = () => {
-    if (window.confirm('Apakah Anda yakin ingin mereset seluruh data kembali ke data contoh bawaan SIBAHAR?')) {
+    if (window.confirm('Apakah Anda yakin ingin mereset pengaturan tampilan lokal kembali ke setelan awal SIBAHAR?')) {
       setReports(initialReports);
-      updateCurrentUserProfile(initialProfile);
       setAppSettings(initialSettings);
       setNotifications(initialNotifications);
       localStorage.removeItem('sibahar_items');
@@ -721,7 +732,7 @@ function SIBAHARAppContent() {
       localStorage.removeItem('reporthub_profile');
       localStorage.removeItem('reporthub_settings');
       localStorage.removeItem('reporthub_notifs');
-      alert('Data sistem SIBAHAR telah direset ke setelan awal.');
+      alert('Pengaturan tampilan lokal SIBAHAR telah direset ke setelan awal.');
     }
   };
 
@@ -756,9 +767,30 @@ function SIBAHARAppContent() {
     (r) => r.status === 'diproses' || r.status === 'menunggu'
   ).length;
 
-  // Unauthenticated screen
+  // Auth loading gate (mencegah kilasan dashboard sebelum sesi Supabase Auth diverifikasi)
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-950 via-slate-950 to-emerald-900 flex flex-col items-center justify-center p-6 text-white">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-white/10 backdrop-blur-md p-2.5 flex items-center justify-center border border-white/20 shadow-lg">
+            <KemensosLogo className="w-11 h-11" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-lg font-extrabold tracking-wider font-mono text-amber-300">SIBAHAR</p>
+            <p className="text-[11px] font-semibold tracking-wide text-emerald-200 uppercase">
+              SISTEM INFORMASI BERITA AKTUAL HARIAN
+            </p>
+            <p className="text-xs text-emerald-100/90">Memverifikasi sesi autentikasi Supabase...</p>
+          </div>
+          <div className="w-8 h-8 border-2 border-emerald-400/30 border-t-amber-300 rounded-full animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  // Unauthenticated screen — wajib login untuk semua URL dan kondisi sebelum sesi terverifikasi
   if (!isLoggedIn) {
-    return <AuthView onSuccess={() => {}} />;
+    return <AuthView />;
   }
 
   return (
@@ -876,6 +908,13 @@ function SIBAHARAppContent() {
             />
           )}
         </main>
+
+        {/* Institutional Footer */}
+        <footer className="mt-auto px-4 sm:px-6 md:px-8 py-4 border-t border-emerald-100/80 bg-white/60 text-center text-[11px] text-slate-500">
+          <p className="font-medium text-slate-600">
+            <strong className="text-emerald-900">SIBAHAR</strong> — Sistem Informasi Berita Aktual Harian · Sekolah Rakyat Terintegerasi 1 Sumedang · Kementerian Sosial Republik Indonesia
+          </p>
+        </footer>
       </div>
 
       {/* Detail Modal */}

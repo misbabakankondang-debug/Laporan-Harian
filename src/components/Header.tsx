@@ -59,7 +59,7 @@ export const Header: React.FC<HeaderProps> = ({
   const getPageSubtitle = () => {
     switch (currentTab) {
       case 'dashboard':
-        return 'Sekolah Rakyat Terintegerasi 1 Sumedang - Kementerian Sosial Republik Indonesia';
+        return 'Sistem Informasi Berita Aktual Harian · Sekolah Rakyat Terintegerasi 1 Sumedang - Kementerian Sosial RI';
       case 'create':
         return 'Ajukan laporan kendala teknis, sarana, atau operasional kantor';
       case 'stats':
