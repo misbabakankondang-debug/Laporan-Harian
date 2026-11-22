@@ -142,6 +142,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [newUserPassword, setNewUserPassword] = useState('Sibahar2026!');
   const [isSavingNewUser, setIsSavingNewUser] = useState(false);
   const [addUserError, setAddUserError] = useState('');
+  const [pendingAuthUser, setPendingAuthUser] = useState<{
+    id: string;
+    token?: string;
+    email: string;
+    schemaMismatch?: boolean;
+  } | null>(null);
 
   // Modal State for Edit User by Admin
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
@@ -381,7 +387,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setNewUserDepartment('Sekolah Rakyat Terintegerasi 1 Sumedang');
     setNewUserPassword('Sibahar2026!');
     setAddUserError('');
+    setPendingAuthUser(null);
     setShowAddUserModal(true);
+  };
+
+  const handleCloseAddUser = () => {
+    setShowAddUserModal(false);
+    setPendingAuthUser(null);
+    setAddUserError('');
   };
 
   const handleSaveNewUser = async (e: React.FormEvent) => {
@@ -391,6 +404,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setAddUserError('Nama lengkap dan alamat email wajib diisi.');
       return;
     }
+
+    const cleanedEmailInput = newUserEmail.trim().toLowerCase();
+    const isContinuingPending = Boolean(
+      pendingAuthUser?.id && pendingAuthUser.email === cleanedEmailInput
+    );
 
     setAddUserError('');
     setIsSavingNewUser(true);
@@ -403,13 +421,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         phone: newUserPhone.trim(),
         department: newUserDepartment.trim(),
         defaultPassword: newUserPassword.trim() || 'Sibahar2026!',
+        ...(isContinuingPending && pendingAuthUser
+          ? {
+              continueProfileOnly: true,
+              existingAuthUserId: pendingAuthUser.id,
+              existingAuthToken: pendingAuthUser.token,
+            }
+          : {}),
       });
 
       if (!res.success) {
+        if (res.partialAuthSuccess && res.pendingAuthUserId) {
+          setPendingAuthUser({
+            id: res.pendingAuthUserId,
+            token: res.pendingAuthAccessToken,
+            email: cleanedEmailInput,
+            schemaMismatch: res.schemaMismatch,
+          });
+        }
         setAddUserError(res.error || 'Gagal menyimpan pengguna baru ke Supabase.');
         return;
       }
 
+      setPendingAuthUser(null);
       setShowAddUserModal(false);
       setUserMgmtSuccessMsg(`Pengguna "${res.user?.name || newUserName.trim()}" berhasil disimpan.`);
       setTimeout(() => setUserMgmtSuccessMsg(''), 4000);
@@ -530,6 +564,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               connected: {
                 label: 'Supabase Terhubung',
                 cls: 'bg-emerald-100 text-emerald-800 border border-emerald-300',
+              },
+              auth_required: {
+                label: 'Gateway & API Key Aktif (Login Diperlukan)',
+                cls: 'bg-sky-100 text-sky-900 border border-sky-300',
               },
               needs_schema: {
                 label: 'Supabase Terhubung - Skema Database Belum Siap',
@@ -1120,11 +1158,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               > = {
                 connected: {
                   title: 'Supabase Terhubung',
-                  summary: 'Gateway, API Key, dan akses database berhasil.',
+                  summary: 'Gateway, API Key, sesi autentikasi pengguna, dan akses profil Supabase berhasil.',
                   boxCls: 'bg-emerald-50 border-emerald-200 text-emerald-950',
                   titleCls: 'text-emerald-950',
                   subCls: 'text-emerald-800',
                   badgeIcon: 'check',
+                },
+                auth_required: {
+                  title: 'Gateway & API Key Terhubung (Login Diperlukan untuk Cek Tabel)',
+                  summary:
+                    'Gateway Supabase dan API Key valid. Pemeriksaan akses tabel profiles membutuhkan sesi autentikasi pengguna.',
+                  boxCls: 'bg-sky-50 border-sky-200 text-sky-950',
+                  titleCls: 'text-sky-950',
+                  subCls: 'text-sky-800',
+                  badgeIcon: 'db',
                 },
                 needs_schema: {
                   title: 'Supabase Terhubung - Skema Database Belum Siap',
@@ -1144,7 +1191,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 },
                 auth_error: {
                   title: 'Autentikasi Supabase Ditolak',
-                  summary: 'Periksa API Key atau token autentikasi.',
+                  summary: 'Periksa API Key atau sesi autentikasi pengguna.',
                   boxCls: 'bg-rose-50 border-rose-200 text-rose-950',
                   titleCls: 'text-rose-950',
                   subCls: 'text-rose-800',
@@ -1167,8 +1214,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   badgeIcon: 'error',
                 },
                 not_configured: {
-                  title: 'Terjadi Kesalahan Koneksi',
-                  summary: 'Periksa informasi diagnostik.',
+                  title: 'Konfigurasi Supabase Belum Lengkap',
+                  summary: 'Periksa pengaturan URL dan API Key Supabase.',
                   boxCls: 'bg-slate-50 border-slate-200 text-slate-900',
                   titleCls: 'text-slate-900',
                   subCls: 'text-slate-700',
@@ -1181,13 +1228,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 ? new Date(currentStat.testedAt).toLocaleString('id-ID')
                 : '—';
 
-              const dbStatusText = currentStat.databaseAccessible
-                ? 'Tersedia & Dapat Diakses'
-                : currentStat.state === 'needs_schema'
-                ? 'Tabel profiles Belum Tersedia'
-                : currentStat.state === 'permission_error'
-                ? 'Terbatas (RLS / Izin Database)'
-                : 'Tidak Dapat Diakses';
+              const authStatusLabel =
+                currentStat.authSessionStatus === 'authenticated'
+                  ? 'Sudah Login (Sesi Aktif)'
+                  : currentStat.authSessionStatus === 'expired'
+                  ? 'Sesi Kedaluwarsa (Login Ulang)'
+                  : currentStat.authSessionStatus === 'invalid'
+                  ? 'Token Sesi Tidak Valid'
+                  : 'Belum Login (Tanpa Sesi Auth)';
+
+              const dbStatusText =
+                currentStat.databaseAccessStatus === 'accessible' || currentStat.databaseAccessible
+                  ? 'Dapat Diakses Sesuai RLS'
+                  : currentStat.databaseAccessStatus === 'requires_auth_session' || currentStat.state === 'auth_required'
+                  ? 'Membutuhkan Sesi Autentikasi'
+                  : currentStat.state === 'needs_schema'
+                  ? 'Tabel profiles Belum Tersedia'
+                  : currentStat.state === 'permission_error'
+                  ? 'Dibatasi RLS / Izin Role'
+                  : currentStat.databaseAccessStatus === 'auth_error'
+                  ? 'Ditolak (Sesi Auth Invalid)'
+                  : 'Tidak Dapat Diakses';
 
               return (
                 <div className={`p-4 rounded-xl border text-xs space-y-3 ${meta.boxCls}`}>
@@ -1206,7 +1267,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </div>
                     )}
                     {meta.badgeIcon === 'db' && (
-                      <Database className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
+                      <Database className="w-4 h-4 text-sky-600 mt-0.5 shrink-0" />
                     )}
 
                     <div className="space-y-1 flex-1">
@@ -1215,6 +1276,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <p className={`text-[11px] leading-relaxed ${meta.subCls}`}>
                         Detail: {currentStat.message}
                       </p>
+                      {currentStat.state === 'auth_required' && (
+                        <p className="text-[11px] text-sky-800 font-medium pt-0.5">
+                          Tabel <code className="font-mono bg-white px-1 rounded border border-sky-200">profiles</code> diamankan oleh RLS dan hak akses{' '}
+                          <code className="font-mono bg-white px-1 rounded border border-sky-200">authenticated</code>. Silakan login menggunakan email &amp; kata sandi akun Supabase Anda agar pemeriksaan akses profil aktif dapat dijalankan.
+                        </p>
+                      )}
                       {currentStat.state === 'needs_schema' && (
                         <p className="text-[11px] text-amber-800 font-medium pt-0.5">
                           Klik tombol <strong>&quot;Salin SQL Schema&quot;</strong> di bawah, buka menu{' '}
@@ -1229,17 +1296,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                             {EXPECTED_SUPABASE_URL}
                           </code>{' '}
                           dan periksa <code className="font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code> /{' '}
-                          <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> pada{' '}
-                          <em>Project Settings &gt; API</em> atau Environment Variables Vercel.
+                          <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> atau login ulang ke akun Supabase Anda.
                         </p>
                       )}
                     </div>
                   </div>
 
-                  {/* Panel Diagnostik Aman (Tanpa Kredensial Rahasia) */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2.5 border-t border-black/10 text-[11px]">
+                  {/* Panel Diagnostik 4 Komponen Terpisah (Tanpa Kredensial Rahasia) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-2.5 border-t border-black/10 text-[11px]">
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Status Gateway (Auth Health)</span>
+                      <span className="block text-[10px] text-slate-500">1. Gateway Supabase (Auth Health)</span>
                       <span className={`font-semibold ${currentStat.gatewayReachable ? 'text-emerald-700' : 'text-rose-700'}`}>
                         {currentStat.gatewayReachable ? 'Aktif / Terhubung' : 'Tidak Terhubung'}
                         {currentStat.gatewayHttpStatus !== null ? ` (HTTP ${currentStat.gatewayHttpStatus})` : ''}
@@ -1247,7 +1313,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Status API Key</span>
+                      <span className="block text-[10px] text-slate-500">2. Validitas API Key</span>
                       <span
                         className={`font-semibold ${
                           currentStat.apiKeyAccepted
@@ -1268,11 +1334,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Status Akses Database (profiles)</span>
+                      <span className="block text-[10px] text-slate-500">3. Status Autentikasi Pengguna</span>
+                      <span
+                        className={`font-semibold ${
+                          currentStat.authSessionStatus === 'authenticated'
+                            ? 'text-emerald-700'
+                            : currentStat.authSessionStatus === 'unauthenticated'
+                            ? 'text-sky-800'
+                            : 'text-rose-700'
+                        }`}
+                      >
+                        {authStatusLabel}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
+                      <span className="block text-[10px] text-slate-500">4. Akses Database (profiles)</span>
                       <span
                         className={`font-semibold ${
                           currentStat.databaseAccessible
                             ? 'text-emerald-700'
+                            : currentStat.state === 'auth_required'
+                            ? 'text-sky-800'
                             : currentStat.state === 'needs_schema' || currentStat.state === 'permission_error'
                             ? 'text-amber-800'
                             : 'text-rose-700'
@@ -1293,20 +1376,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Error Code / Tahap Gagal</span>
+                      <span className="block text-[10px] text-slate-500">Error Code / Waktu Uji</span>
                       <span className="font-mono font-semibold text-slate-800">
                         {currentStat.errorCode || 'Tidak ada'}
                         {currentStat.failedStage ? ` (${currentStat.failedStage})` : ''}
                       </span>
-                    </div>
-
-                    <div className="bg-white/75 rounded-lg px-2.5 py-1.5 border border-black/5">
-                      <span className="block text-[10px] text-slate-500">Waktu Pengujian</span>
-                      <span className="font-medium text-slate-800">{formattedTestedAt}</span>
+                      <span className="block text-[10px] text-slate-500 mt-0.5">{formattedTestedAt}</span>
                     </div>
                   </div>
 
                   {!currentStat.connected &&
+                    currentStat.state !== 'auth_required' &&
                     currentStat.diagnosticDetails &&
                     (currentStat.diagnosticDetails.sbErrorCode ||
                       currentStat.diagnosticDetails.code ||
@@ -1723,7 +1803,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setShowAddUserModal(false)}
+                onClick={handleCloseAddUser}
                 className="text-purple-300 hover:text-white p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
@@ -1732,8 +1812,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             <form onSubmit={handleSaveNewUser} className="p-5 space-y-4 text-xs">
               {addUserError && (
-                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs">
-                  {addUserError}
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs space-y-1.5">
+                  <p className="font-medium leading-relaxed">{addUserError}</p>
+                  {pendingAuthUser && (
+                    <div className="p-2 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-900 space-y-1">
+                      <p className="font-semibold">
+                        Akun Auth sudah terbuat (UUID:{' '}
+                        <span className="font-mono select-all">{pendingAuthUser.id}</span>)
+                      </p>
+                      <p>
+                        {pendingAuthUser.schemaMismatch
+                          ? 'Jalankan SQL migrasi kolom public.profiles & NOTIFY pgrst di Supabase SQL Editor (gunakan tombol Salin SQL Schema di menu Pengaturan), lalu klik tombol "Lanjutkan Simpan Profil" di bawah tanpa membuat akun Auth ganda.'
+                          : 'Klik tombol "Lanjutkan Simpan Profil" di bawah untuk menyimpan profil ke tabel public.profiles tanpa membuat akun Auth ganda.'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1793,7 +1886,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="email"
                     required
                     value={newUserEmail}
-                    onChange={(e) => setNewUserEmail(e.target.value)}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setNewUserEmail(nextVal);
+                      if (pendingAuthUser && nextVal.trim().toLowerCase() !== pendingAuthUser.email) {
+                        setPendingAuthUser(null);
+                      }
+                    }}
                     placeholder="nama@srt1sumedang.sch.id"
                     className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-purple-500 text-xs"
                   />
@@ -1845,7 +1944,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   type="button"
                   disabled={isSavingNewUser}
-                  onClick={() => setShowAddUserModal(false)}
+                  onClick={handleCloseAddUser}
                   className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition disabled:opacity-50"
                 >
                   Batal
@@ -1855,7 +1954,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   disabled={isSavingNewUser}
                   className="px-5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-xs"
                 >
-                  {isSavingNewUser ? 'Menyimpan ke Supabase...' : 'Simpan Pengguna Baru'}
+                  {isSavingNewUser
+                    ? 'Menyimpan ke Supabase...'
+                    : pendingAuthUser
+                      ? 'Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)'
+                      : 'Simpan Pengguna Baru'}
                 </button>
               </div>
             </form>

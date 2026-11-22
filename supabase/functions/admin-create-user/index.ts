@@ -28,14 +28,18 @@ serve(async (req) => {
       );
     }
 
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const normalizedName = String(fullName).trim();
+    const normalizedRole = String(role).trim() === 'keamanan' ? 'tenaga_keamanan' : String(role).trim();
+
     const { data: authData, error: authError } = await supabaseClient.auth.admin.createUser({
-      email: email.trim(),
+      email: normalizedEmail,
       password,
       email_confirm: true,
       user_metadata: {
-        full_name: fullName.trim(),
-        role,
-        nip: nip?.trim() || "-",
+        full_name: normalizedName,
+        role: normalizedRole,
+        nip: nip?.trim() || '-',
         department: department?.trim() || "Sekolah Rakyat Terintegerasi 1 Sumedang",
       },
     });
@@ -47,8 +51,7 @@ serve(async (req) => {
       );
     }
 
-    const initials = fullName
-      .trim()
+    const initials = normalizedName
       .split(" ")
       .filter(Boolean)
       .map((part: string) => part[0])
@@ -58,20 +61,24 @@ serve(async (req) => {
 
     const { error: profileError } = await supabaseClient.from("profiles").upsert({
       id: authData.user.id,
-      full_name: fullName.trim(),
-      email: email.trim(),
-      role,
+      full_name: normalizedName,
+      email: normalizedEmail,
+      role: normalizedRole,
       nip: nip?.trim() || "-",
       phone: phone?.trim() || "",
       department: department?.trim() || "Sekolah Rakyat Terintegerasi 1 Sumedang",
       avatar_initials: initials,
       is_active: true,
       updated_at: new Date().toISOString(),
-    });
+    }, { onConflict: "id" });
 
     if (profileError) {
       return new Response(
-        JSON.stringify({ error: profileError.message }),
+        JSON.stringify({
+          error: profileError.message,
+          partialAuthSuccess: true,
+          pendingAuthUserId: authData.user.id,
+        }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
       );
     }

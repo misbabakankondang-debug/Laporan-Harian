@@ -266,6 +266,10 @@ export interface UserMutationResult {
   success: boolean;
   user?: UserProfile;
   error?: string;
+  partialAuthSuccess?: boolean;
+  pendingAuthUserId?: string;
+  pendingAuthAccessToken?: string;
+  schemaMismatch?: boolean;
 }
 
 interface AuthContextType {
@@ -299,6 +303,9 @@ interface AuthContextType {
     department?: string;
     phone?: string;
     defaultPassword?: string;
+    existingAuthUserId?: string;
+    existingAuthToken?: string;
+    continueProfileOnly?: boolean;
   }) => Promise<UserMutationResult>;
   updateUserByAdmin: (userId: string, updates: Partial<UserProfile>) => Promise<UserMutationResult>;
   deleteUserByAdmin: (userId: string) => Promise<{ success: boolean; error?: string }>;
@@ -348,6 +355,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     gatewayReachable: false,
     apiKeyValid: false,
     apiKeyAccepted: false,
+    isUserAuthenticated: false,
+    authSessionStatus: 'unauthenticated',
+    requiresAuthSession: false,
+    databaseAccessStatus: 'unavailable',
     databaseAccessible: false,
     httpStatus: null,
     errorCode: null,
@@ -405,12 +416,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return promise;
   }, []);
 
-  // Muat seluruh data profil dari Supabase `profiles` (sumber utama, dipetakan per ID)
+  // Muat seluruh data profil dari Supabase `profiles` (hanya bila sesi pengguna Supabase aktif, sesuai RLS & GRANT authenticated)
   const refreshUsersFromSupabase = useCallback(async () => {
     const client = getSupabaseClient();
     if (!client) return;
 
     try {
+      const { data: sessionData } = await client.auth.getSession();
+      if (!sessionData?.session?.access_token) {
+        return;
+      }
+
       const { data: remoteProfiles, error } = await client
         .from('profiles')
         .select('*')
@@ -749,6 +765,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     department?: string;
     phone?: string;
     defaultPassword?: string;
+    existingAuthUserId?: string;
+    existingAuthToken?: string;
+    continueProfileOnly?: boolean;
   }): Promise<UserMutationResult> => {
     const cleanedName = userData.name.trim();
     const cleanedEmail = userData.email.trim().toLowerCase();
@@ -758,30 +777,63 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const cleanedDept = userData.department?.trim() || 'Sekolah Rakyat Terintegerasi 1 Sumedang';
     const password = (userData.defaultPassword || 'Sibahar2026!').trim();
     const initials = computeAvatarInitials(cleanedName);
+    const isContinuingProfile = Boolean(
+      userData.continueProfileOnly && isUuid(userData.existingAuthUserId)
+    );
+
+    const isProfilesSchemaError = (msg: string): boolean => {
+      const lower = msg.toLowerCase();
+      return (
+        lower.includes('schema cache') ||
+        lower.includes('pgrst204') ||
+        lower.includes('could not find the') ||
+        (lower.includes('column') && lower.includes('profiles')) ||
+        lower.includes('does not exist')
+      );
+    };
 
     if (!cleanedName || !cleanedEmail) {
       return { success: false, error: 'Nama lengkap dan alamat email wajib diisi.' };
     }
 
-    if (password.length < 6) {
+    if (!isContinuingProfile && password.length < 6) {
       return { success: false, error: 'Kata sandi awal minimal 6 karakter.' };
     }
 
     // Pastikan email belum dipakai pengguna lain agar tidak saling menimpa
-    const duplicateUser = allUsersListRef.current.find(
-      (u) => u.email.trim().toLowerCase() === cleanedEmail
-    );
-    if (duplicateUser) {
-      return {
-        success: false,
-        error: `Email ${cleanedEmail} sudah digunakan oleh ${duplicateUser.name}. Gunakan email unik untuk pengguna baru.`,
-      };
+    if (!isContinuingProfile) {
+      const duplicateUser = allUsersListRef.current.find(
+        (u) => u.email.trim().toLowerCase() === cleanedEmail
+      );
+      if (duplicateUser) {
+        return {
+          success: false,
+          error: `Email ${cleanedEmail} sudah digunakan oleh ${duplicateUser.name}. Gunakan email unik untuk pengguna baru.`,
+        };
+      }
     }
 
     const client = getSupabaseClient();
     const cfg = getSupabaseConfig();
 
     if (client && cfg.isConfigured) {
+      if (!isContinuingProfile) {
+        try {
+          const { data: existingRemoteProfile } = await client
+            .from('profiles')
+            .select('id, email')
+            .eq('email', cleanedEmail)
+            .maybeSingle();
+
+          if (existingRemoteProfile?.id) {
+            return {
+              success: false,
+              error: `Email ${cleanedEmail} sudah terdaftar pada tabel profiles di Supabase. Gunakan email unik.`,
+            };
+          }
+        } catch {}
+      }
+
       let activeToken = '';
       try {
         const { data: sessionData } = await client.auth.getSession();
@@ -789,10 +841,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } catch {}
 
       let createdProfile: UserProfile | null = null;
+      let shouldTryRestProfileOnly = false;
       let shouldTrySignupFallback = false;
       let apiErrorMsg = '';
 
-      // Jalur utama: Vercel Serverless Function /api/admin-create-user (membuat auth.users + public.profiles secara atomik)
+      // Jalur utama: Vercel Serverless Function /api/admin-create-user (membuat auth.users + public.profiles secara atomik, atau melanjutkan profil UUID yang sudah ada)
       try {
         const apiRes = await globalThis.fetch('/api/admin-create-user', {
           method: 'POST',
@@ -808,6 +861,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             nip: cleanedNip,
             department: cleanedDept,
             phone: cleanedPhone,
+            ...(isContinuingProfile
+              ? {
+                  continueProfileOnly: true,
+                  existingAuthUserId: userData.existingAuthUserId,
+                }
+              : {}),
           }),
         });
 
@@ -827,25 +886,124 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           });
         } else {
           apiErrorMsg = apiBody?.error || `HTTP ${apiRes.status}`;
+
+          // Jika Auth sudah berhasil dibuat namun penyimpanan ke profiles gagal, JANGAN buat akun Auth baru!
+          if (apiBody?.partialAuthSuccess && apiBody?.pendingAuthUserId) {
+            return {
+              success: false,
+              error: apiErrorMsg,
+              partialAuthSuccess: true,
+              pendingAuthUserId: apiBody.pendingAuthUserId,
+              schemaMismatch: Boolean(apiBody.schemaMismatch),
+            };
+          }
+
           const lowerErr = apiErrorMsg.toLowerCase();
-          // Jika endpoint /api tidak aktif di mode dev (404) atau SERVICE_ROLE belum terpasang, coba jalur Auth Signup + Profiles
-          if (
+          const isApiUnavailable =
             apiRes.status === 404 ||
             lowerErr.includes('service_role') ||
-            lowerErr.includes('belum lengkap')
-          ) {
-            shouldTrySignupFallback = true;
+            lowerErr.includes('belum lengkap');
+
+          if (isApiUnavailable) {
+            if (isContinuingProfile) {
+              shouldTryRestProfileOnly = true;
+            } else {
+              shouldTrySignupFallback = true;
+            }
           } else {
             return { success: false, error: apiErrorMsg };
           }
         }
       } catch (netErr: any) {
-        shouldTrySignupFallback = true;
         apiErrorMsg = netErr?.message || 'Gagal menghubungi endpoint /api/admin-create-user.';
+        if (isContinuingProfile) {
+          shouldTryRestProfileOnly = true;
+        } else {
+          shouldTrySignupFallback = true;
+        }
+      }
+
+      const saveProfileViaRest = async (
+        targetUuid: string,
+        bearerToken: string
+      ): Promise<UserMutationResult> => {
+        const profilePayload = {
+          id: targetUuid,
+          full_name: cleanedName,
+          email: cleanedEmail,
+          role: normalizedRole,
+          nip: cleanedNip,
+          phone: cleanedPhone,
+          department: cleanedDept,
+          avatar_initials: initials,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        };
+
+        const restRes = await globalThis.fetch(`${cfg.url}/rest/v1/profiles`, {
+          method: 'POST',
+          headers: {
+            ...buildSupabaseRestHeaders(cfg.key, bearerToken),
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=representation',
+          },
+          body: JSON.stringify(profilePayload),
+        });
+
+        const restData = await restRes.json().catch(() => null);
+        if (!restRes.ok) {
+          const errMsg =
+            restData?.message ||
+            restData?.details ||
+            restData?.hint ||
+            `HTTP ${restRes.status}`;
+          const schemaMismatch = isProfilesSchemaError(errMsg);
+          return {
+            success: false,
+            partialAuthSuccess: true,
+            pendingAuthUserId: targetUuid,
+            pendingAuthAccessToken: bearerToken,
+            schemaMismatch,
+            error: schemaMismatch
+              ? `Akun Auth dibuat, namun gagal menyimpan ke tabel profiles karena skema database belum lengkap: ${errMsg}. Jalankan SQL migrasi kolom profiles di Supabase SQL Editor, lalu klik "Lanjutkan Simpan Profil".`
+              : `Akun Auth dibuat, namun gagal menyimpan ke tabel profiles Supabase: ${errMsg}`,
+          };
+        }
+
+        const savedRow = Array.isArray(restData) ? restData[0] : restData;
+        return {
+          success: true,
+          user: mapDbProfileToUserProfile(savedRow || profilePayload),
+        };
+      };
+
+      // Mode lanjutan khusus profil saja (tanpa memanggil /auth/v1/signup lagi!)
+      if (!createdProfile && isContinuingProfile && shouldTryRestProfileOnly && userData.existingAuthUserId) {
+        try {
+          const restResult = await saveProfileViaRest(
+            userData.existingAuthUserId,
+            activeToken || userData.existingAuthToken || ''
+          );
+          if (!restResult.success) {
+            return restResult;
+          }
+          createdProfile = restResult.user || null;
+        } catch (restErr: any) {
+          return {
+            success: false,
+            partialAuthSuccess: true,
+            pendingAuthUserId: userData.existingAuthUserId,
+            pendingAuthAccessToken: userData.existingAuthToken,
+            error:
+              restErr?.message ||
+              apiErrorMsg ||
+              'Gagal menyimpan profil lanjutan ke Supabase.',
+          };
+        }
       }
 
       // Jalur cadangan resmi Supabase: POST /auth/v1/signup (tanpa GoTrueClient kedua) + INSERT public.profiles
-      if (!createdProfile && shouldTrySignupFallback) {
+      if (!createdProfile && !isContinuingProfile && shouldTrySignupFallback) {
         try {
           const signupRes = await globalThis.fetch(`${cfg.url}/auth/v1/signup`, {
             method: 'POST',
@@ -867,14 +1025,50 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
           const signupData = await signupRes.json().catch(() => ({}));
           if (!signupRes.ok) {
+            const signupErrMsg =
+              signupData?.msg ||
+              signupData?.error_description ||
+              signupData?.message ||
+              apiErrorMsg ||
+              `Gagal membuat akun Auth di Supabase (HTTP ${signupRes.status}).`;
+
+            const lowerSignupErr = `${signupData?.error_code || ''} ${signupErrMsg}`.toLowerCase();
+            if (
+              lowerSignupErr.includes('already') ||
+              lowerSignupErr.includes('registered') ||
+              lowerSignupErr.includes('exists')
+            ) {
+              // Jangan pernah membuat akun Auth baru untuk email yang sudah terdaftar; pulihkan sesi/UUID Auth bila hanya profil yang belum tersimpan
+              try {
+                const tokenRes = await globalThis.fetch(
+                  `${cfg.url}/auth/v1/token?grant_type=password`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      ...buildSupabaseRestHeaders(cfg.key),
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email: cleanedEmail, password }),
+                  }
+                );
+                const tokenData = await tokenRes.json().catch(() => ({}));
+                const recoveredUuid = tokenData?.user?.id;
+                const recoveredToken = tokenData?.access_token || '';
+                if (tokenRes.ok && isUuid(recoveredUuid)) {
+                  return {
+                    success: false,
+                    partialAuthSuccess: true,
+                    pendingAuthUserId: recoveredUuid,
+                    pendingAuthAccessToken: recoveredToken,
+                    error: `Akun Auth untuk ${cleanedEmail} sudah dibuat sebelumnya (UUID: ${recoveredUuid}), namun belum tersimpan di tabel profiles. Klik "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)" setelah skema siap.`,
+                  };
+                }
+              } catch {}
+            }
+
             return {
               success: false,
-              error:
-                signupData?.msg ||
-                signupData?.error_description ||
-                signupData?.message ||
-                apiErrorMsg ||
-                `Gagal membuat akun Auth di Supabase (HTTP ${signupRes.status}).`,
+              error: signupErrMsg,
             };
           }
 
@@ -889,46 +1083,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             };
           }
 
-          const profilePayload = {
-            id: newAuthUuid,
-            full_name: cleanedName,
-            email: cleanedEmail,
-            role: normalizedRole,
-            nip: cleanedNip,
-            phone: cleanedPhone,
-            department: cleanedDept,
-            avatar_initials: initials,
-            is_active: true,
-            updated_at: new Date().toISOString(),
-          };
-
           // Gunakan token Admin aktif atau token user baru (memenuhi RLS: auth.uid() = id OR is_admin())
           const insertToken = activeToken || signupToken;
-          const restRes = await globalThis.fetch(`${cfg.url}/rest/v1/profiles`, {
-            method: 'POST',
-            headers: {
-              ...buildSupabaseRestHeaders(cfg.key, insertToken),
-              'Content-Type': 'application/json',
-              Prefer: 'return=representation',
-            },
-            body: JSON.stringify(profilePayload),
-          });
-
-          const restData = await restRes.json().catch(() => null);
-          if (!restRes.ok) {
-            const errMsg =
-              restData?.message ||
-              restData?.details ||
-              restData?.hint ||
-              `HTTP ${restRes.status}`;
-            return {
-              success: false,
-              error: `Akun Auth dibuat, namun gagal menyimpan ke tabel profiles Supabase: ${errMsg}`,
-            };
+          const restResult = await saveProfileViaRest(newAuthUuid, insertToken);
+          if (!restResult.success) {
+            return restResult;
           }
-
-          const savedRow = Array.isArray(restData) ? restData[0] : restData;
-          createdProfile = mapDbProfileToUserProfile(savedRow || profilePayload);
+          createdProfile = restResult.user || null;
         } catch (fallbackErr: any) {
           return {
             success: false,

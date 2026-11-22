@@ -36,7 +36,21 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS role user_role_type NOT NULL DEFAULT 'guru';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS nip TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS department TEXT DEFAULT 'Sekolah Rakyat Terintegerasi 1 Sumedang';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS avatar_initials TEXT DEFAULT 'SR';
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now());
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now());
+
+UPDATE public.profiles SET is_active = true WHERE is_active IS NULL;
+ALTER TABLE public.profiles ALTER COLUMN is_active SET DEFAULT true;
+ALTER TABLE public.profiles ALTER COLUMN is_active SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
@@ -471,4 +485,6 @@ GRANT EXECUTE ON FUNCTION public.delete_user_profile(TEXT) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.delete_user_profile(UUID) FROM public;
 REVOKE EXECUTE ON FUNCTION public.delete_user_profile(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.delete_user_profile(UUID) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
 

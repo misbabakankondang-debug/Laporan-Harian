@@ -268,12 +268,15 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
 
             {(() => {
               const isOk = supabaseStatus.state === 'connected';
+              const isAuthRequired = supabaseStatus.state === 'auth_required';
               const isPartial =
                 supabaseStatus.state === 'needs_schema' ||
                 supabaseStatus.state === 'permission_error';
               const pillLabel =
                 supabaseStatus.state === 'connected'
                   ? 'Supabase Terhubung'
+                  : supabaseStatus.state === 'auth_required'
+                  ? 'Gateway Supabase Aktif (Login untuk Akses Data)'
                   : supabaseStatus.state === 'needs_schema'
                   ? 'Supabase Terhubung - Skema Database Belum Siap'
                   : supabaseStatus.state === 'permission_error'
@@ -287,7 +290,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
               return (
                 <div
                   className={`mt-2.5 flex items-center gap-2 text-[10.5px] px-3 py-1 rounded-full border ${
-                    isOk
+                    isOk || isAuthRequired
                       ? 'text-emerald-200 bg-black/25 border-white/10'
                       : isPartial
                       ? 'text-amber-200 bg-amber-950/60 border-amber-400/30'
@@ -296,7 +299,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
                 >
                   <Database
                     className={`w-3.5 h-3.5 shrink-0 ${
-                      isOk ? 'text-emerald-300' : isPartial ? 'text-amber-300' : 'text-rose-300'
+                      isOk || isAuthRequired ? 'text-emerald-300' : isPartial ? 'text-amber-300' : 'text-rose-300'
                     }`}
                   />
                   <span className="truncate max-w-xs sm:max-w-md" title={supabaseStatus.message}>
