@@ -143,7 +143,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [addUserError, setAddUserError] = useState('');
   const [pendingAuthUser, setPendingAuthUser] = useState<{
     id: string;
-    token?: string;
     email: string;
     schemaMismatch?: boolean;
   } | null>(null);
@@ -416,7 +415,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           ? {
               continueProfileOnly: true,
               existingAuthUserId: pendingAuthUser.id,
-              existingAuthToken: pendingAuthUser.token,
             }
           : {}),
       });
@@ -425,7 +423,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         if (res.partialAuthSuccess && res.pendingAuthUserId) {
           setPendingAuthUser({
             id: res.pendingAuthUserId,
-            token: res.pendingAuthAccessToken,
             email: cleanedEmailInput,
             schemaMismatch: res.schemaMismatch,
           });
@@ -1751,15 +1748,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs space-y-1.5">
                   <p className="font-medium leading-relaxed">{addUserError}</p>
                   {pendingAuthUser && (
-                    <div className="p-2 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-900 space-y-1">
+                    <div className="p-2.5 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-900 space-y-1">
                       <p className="font-semibold">
                         Akun Auth sudah terbuat (UUID:{' '}
                         <span className="font-mono select-all">{pendingAuthUser.id}</span>)
                       </p>
                       <p>
                         {pendingAuthUser.schemaMismatch
-                          ? 'Jalankan SQL migrasi kolom public.profiles & NOTIFY pgrst di Supabase SQL Editor (gunakan tombol Salin SQL Schema di menu Pengaturan), lalu klik tombol "Lanjutkan Simpan Profil" di bawah tanpa membuat akun Auth ganda.'
-                          : 'Klik tombol "Lanjutkan Simpan Profil" di bawah untuk menyimpan profil ke tabel public.profiles tanpa membuat akun Auth ganda.'}
+                          ? 'Jalankan SQL migrasi kolom public.profiles & NOTIFY pgrst di Supabase SQL Editor, lalu klik tombol "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)" untuk menyimpan melalui backend server.'
+                          : 'Klik tombol "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)" di bawah untuk menyimpan profil ke tabel public.profiles melalui backend server tanpa membuat akun Auth ganda.'}
                       </p>
                     </div>
                   )}
@@ -1863,15 +1860,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 <div>
                   <label className="block text-slate-700 font-medium mb-1">
-                    Kata Sandi Awal (Min. 6 Karakter)
+                    {pendingAuthUser
+                      ? 'Kata Sandi (Sudah Terdaftar di Auth)'
+                      : 'Kata Sandi Awal (Min. 6 Karakter)'}
                   </label>
                   <input
                     type="text"
-                    minLength={6}
+                    minLength={pendingAuthUser ? undefined : 6}
+                    disabled={Boolean(pendingAuthUser)}
                     value={newUserPassword}
                     onChange={(e) => setNewUserPassword(e.target.value)}
                     placeholder="Sibahar2026!"
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-purple-500 font-mono text-xs"
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-purple-500 font-mono text-xs disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
               </div>
