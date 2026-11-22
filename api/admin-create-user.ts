@@ -38,6 +38,74 @@ const isSchemaCacheError = (err: { message?: string; code?: string } | null | un
   );
 };
 
+const isDuplicateKeyError = (err: { message?: string; code?: string } | null | undefined): boolean => {
+  if (!err) return false;
+  const code = String(err.code || '').toUpperCase();
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    code === '23505' ||
+    msg.includes('duplicate key') ||
+    msg.includes('profiles_pkey') ||
+    msg.includes('unique constraint')
+  );
+};
+
+const normalizeComparableText = (value: unknown): string =>
+  String(value ?? '').trim().toLowerCase();
+
+const normalizeComparableRole = (value: unknown): string => {
+  const raw = normalizeComparableText(value);
+  return raw === 'keamanan' ? 'tenaga_keamanan' : raw;
+};
+
+interface ProfileIdentityCheckParams {
+  profile: Record<string, any>;
+  expectedUserId: string;
+  authEmail: string;
+  expectedEmail: string;
+  expectedName: string;
+  expectedRole: string;
+}
+
+function validateProfileIdentity(
+  params: ProfileIdentityCheckParams
+): { ok: true } | { ok: false; error: string } {
+  const { profile, expectedUserId, authEmail, expectedEmail, expectedName, expectedRole } = params;
+
+  if (!profile?.id || String(profile.id).trim() !== expectedUserId) {
+    return {
+      ok: false,
+      error: `Identitas profil tidak cocok: profiles.id (${profile?.id || 'kosong'}) berbeda dengan UUID Auth (${expectedUserId}).`,
+    };
+  }
+
+  const profileEmail = normalizeComparableText(profile.email);
+  if (!profileEmail || profileEmail !== authEmail || profileEmail !== expectedEmail) {
+    return {
+      ok: false,
+      error: `Identitas profil tidak cocok: email profil (${profileEmail || 'kosong'}) tidak sesuai dengan email akun Auth (${authEmail}).`,
+    };
+  }
+
+  const profileName = normalizeComparableText(profile.full_name ?? profile.name);
+  if (!profileName || profileName !== normalizeComparableText(expectedName)) {
+    return {
+      ok: false,
+      error: `Identitas profil tidak cocok: nama profil ("${profile.full_name || ''}") tidak sesuai dengan metadata akun ("${expectedName}").`,
+    };
+  }
+
+  const profileRole = normalizeComparableRole(profile.role);
+  if (!profileRole || profileRole !== normalizeComparableRole(expectedRole)) {
+    return {
+      ok: false,
+      error: `Identitas profil tidak cocok: role profil ("${profile.role || ''}") tidak sesuai dengan role akun ("${expectedRole}").`,
+    };
+  }
+
+  return { ok: true };
+}
+
 async function findAuthUserByEmail(
   supabaseAdmin: SupabaseClient,
   targetEmail: string
@@ -203,52 +271,28 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
       });
     }
 
+    const normalizedNip = nip ? String(nip).trim() : '-';
+    const normalizedPhone = phone ? String(phone).trim() : '';
+    const normalizedDepartment = department
+      ? String(department).trim()
+      : 'Sekolah Rakyat Terintegerasi 1 Sumedang';
+    const initials =
+      normalizedName
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((part: string) => part[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase() || 'SR';
+
     try {
-      // 4. Tolak jika profil sudah ada di public.profiles (berdasarkan email atau UUID) agar tidak terjadi duplikasi
-      const { data: existingByEmail, error: existingByEmailErr } = await supabaseAdmin
-        .from('profiles')
-        .select('id, email')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-
-      if (existingByEmailErr && !isSchemaCacheError(existingByEmailErr)) {
-        return res.status(500).json({
-          error: `Gagal memeriksa tabel profiles: ${existingByEmailErr.message}`,
-        });
-      }
-
-      if (existingByEmail?.id) {
-        return res.status(409).json({
-          error: `Profil untuk email ${normalizedEmail} sudah terdaftar di tabel public.profiles (ID: ${existingByEmail.id}). Penyimpanan ditolak untuk mencegah duplikasi.`,
-          code: 'PROFILE_ALREADY_EXISTS',
-        });
-      }
-
       let userId = '';
+      let authEmail = normalizedEmail;
       let confirmedEmailAt: string | null = null;
 
       if (isContinuingProfile) {
-        // 5a. Mode "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)":
+        // 4a. Mode "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)":
         // Tidak memanggil createUser / signUp lagi!
-        const { data: existingById, error: existingByIdErr } = await supabaseAdmin
-          .from('profiles')
-          .select('id, email')
-          .eq('id', requestedAuthId)
-          .maybeSingle();
-
-        if (existingByIdErr && !isSchemaCacheError(existingByIdErr)) {
-          return res.status(500).json({
-            error: `Gagal memeriksa UUID pada tabel profiles: ${existingByIdErr.message}`,
-          });
-        }
-
-        if (existingById?.id) {
-          return res.status(409).json({
-            error: `Profil untuk UUID Auth ${requestedAuthId} sudah tersimpan di tabel public.profiles. Penyimpanan ditolak untuk mencegah duplikasi.`,
-            code: 'PROFILE_ALREADY_EXISTS',
-          });
-        }
-
         // Pastikan UUID benar-benar milik akun Auth yang sudah ada dan emailnya cocok
         const { data: verifiedAuth, error: verifyErr } =
           await supabaseAdmin.auth.admin.getUserById(requestedAuthId);
@@ -259,17 +303,19 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           });
         }
 
-        const authEmail = (verifiedAuth.user.email || '').trim().toLowerCase();
-        if (!authEmail || authEmail !== normalizedEmail) {
+        const resolvedAuthEmail = normalizeComparableText(verifiedAuth.user.email);
+        if (!resolvedAuthEmail || resolvedAuthEmail !== normalizedEmail) {
           return res.status(409).json({
-            error: `Email profil (${normalizedEmail}) tidak cocok dengan email akun Supabase Auth (${authEmail || 'kosong'}).`,
+            error: `Email profil (${normalizedEmail}) tidak cocok dengan email akun Supabase Auth (${resolvedAuthEmail || 'kosong'}).`,
+            code: 'AUTH_EMAIL_MISMATCH',
           });
         }
 
         userId = verifiedAuth.user.id;
+        authEmail = resolvedAuthEmail;
         confirmedEmailAt = verifiedAuth.user.email_confirmed_at || null;
 
-        // Konfirmasi email otomatis sebelum menyimpan profil apabila akun Auth belum terkonfirmasi
+        // Konfirmasi email otomatis sebelum menyimpan/memverifikasi profil apabila akun Auth belum terkonfirmasi
         if (!confirmedEmailAt) {
           const { data: confirmedAuth, error: confirmErr } =
             await supabaseAdmin.auth.admin.updateUserById(userId, {
@@ -288,7 +334,27 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           confirmedEmailAt = confirmedAuth.user.email_confirmed_at;
         }
       } else {
-        // 5b. Mode Buat Pengguna Baru:
+        // 4b. Mode Buat Pengguna Baru:
+        // Tolak lebih awal jika profil dengan email tersebut sudah ada di public.profiles
+        const { data: existingByEmail, error: existingByEmailErr } = await supabaseAdmin
+          .from('profiles')
+          .select('id, email')
+          .eq('email', normalizedEmail)
+          .maybeSingle();
+
+        if (existingByEmailErr && !isSchemaCacheError(existingByEmailErr)) {
+          return res.status(500).json({
+            error: `Gagal memeriksa tabel profiles: ${existingByEmailErr.message}`,
+          });
+        }
+
+        if (existingByEmail?.id) {
+          return res.status(409).json({
+            error: `Profil untuk email ${normalizedEmail} sudah terdaftar di tabel public.profiles (ID: ${existingByEmail.id}). Penyimpanan ditolak untuk mencegah duplikasi.`,
+            code: 'PROFILE_ALREADY_EXISTS',
+          });
+        }
+
         // Cek terlebih dahulu di Supabase Auth agar tidak membuat akun Auth ganda
         const existingAuthUser = await findAuthUserByEmail(supabaseAdmin, normalizedEmail);
         if (existingAuthUser) {
@@ -313,7 +379,7 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           });
         }
 
-        // Buat user di Supabase Auth (hanya satu kali)
+        // Buat user di Supabase Auth dengan metadata lengkap untuk trigger handle_new_user()
         const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
           email: normalizedEmail,
           password: String(password),
@@ -321,10 +387,10 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           user_metadata: {
             full_name: normalizedName,
             role: normalizedRole,
-            nip: nip ? String(nip).trim() : '-',
-            department: department
-              ? String(department).trim()
-              : 'Sekolah Rakyat Terintegerasi 1 Sumedang',
+            nip: normalizedNip,
+            department: normalizedDepartment,
+            phone: normalizedPhone,
+            avatar_initials: initials,
           },
         });
 
@@ -351,9 +417,10 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
         }
 
         userId = authData.user.id;
+        authEmail = normalizeComparableText(authData.user.email || normalizedEmail);
         confirmedEmailAt = authData.user.email_confirmed_at || null;
 
-        // Pastikan akun baru berstatus email terkonfirmasi sebelum menyimpan profil
+        // Pastikan akun baru berstatus email terkonfirmasi sebelum verifikasi/simpan profil
         if (!confirmedEmailAt) {
           const { data: confirmedAuth, error: confirmErr } =
             await supabaseAdmin.auth.admin.updateUserById(userId, {
@@ -373,49 +440,135 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
         }
       }
 
-      const initials =
-        normalizedName
-          .split(/\s+/)
-          .filter(Boolean)
-          .map((part: string) => part[0])
-          .join('')
-          .slice(0, 2)
-          .toUpperCase() || 'SR';
-
-      const profileRow = {
-        id: userId,
-        full_name: normalizedName,
-        email: normalizedEmail,
-        role: normalizedRole,
-        nip: nip ? String(nip).trim() : '-',
-        phone: phone ? String(phone).trim() : '',
-        department: department
-          ? String(department).trim()
-          : 'Sekolah Rakyat Terintegerasi 1 Sumedang',
-        avatar_initials: initials,
-        is_active: true,
-        updated_at: new Date().toISOString(),
-      };
-
-      // 6. Simpan profil ke public.profiles menggunakan service-role client (INSERT ketat dengan UUID Auth yang sama)
-      const { data: savedProfile, error: profileError } = await supabaseAdmin
+      // 5. Periksa apakah profil dengan UUID Auth yang sama sudah tersedia di public.profiles
+      // (misalnya otomatis dibuat oleh trigger on_auth_user_created -> handle_new_user())
+      const { data: existingProfileById, error: existingByIdErr } = await supabaseAdmin
         .from('profiles')
-        .insert(profileRow)
         .select('*')
-        .single();
+        .eq('id', userId)
+        .maybeSingle();
 
-      if (profileError) {
-        const schemaMismatch = isSchemaCacheError(profileError);
-        // Pertahankan UUID Auth agar Admin dapat mencoba ulang via "Lanjutkan Simpan Profil" tanpa membuat akun Auth ganda
+      if (existingByIdErr && !isSchemaCacheError(existingByIdErr)) {
         return res.status(500).json({
-          error: schemaMismatch
-            ? `Akun Auth sudah dibuat (UUID: ${userId}), namun gagal menyimpan ke tabel profiles karena skema database belum lengkap: ${profileError.message}. Klik "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)" setelah skema diperbarui.`
-            : `Akun Auth sudah dibuat (UUID: ${userId}), namun gagal menyimpan ke tabel profiles: ${profileError.message}. Anda dapat mencoba ulang menggunakan tombol "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)".`,
+          error: `Gagal memeriksa profil pada tabel public.profiles: ${existingByIdErr.message}`,
           partialAuthSuccess: true,
           pendingAuthUserId: userId,
-          schemaMismatch,
-          code: schemaMismatch ? 'PROFILES_SCHEMA_MISMATCH' : 'PROFILES_SAVE_FAILED',
         });
+      }
+
+      let savedProfile: Record<string, any> | null = null;
+      let profileAlreadyExisted = false;
+
+      if (existingProfileById?.id) {
+        const identityCheck = validateProfileIdentity({
+          profile: existingProfileById,
+          expectedUserId: userId,
+          authEmail,
+          expectedEmail: normalizedEmail,
+          expectedName: normalizedName,
+          expectedRole: normalizedRole,
+        });
+
+        if (!identityCheck.ok) {
+          return res.status(409).json({
+            error: identityCheck.error,
+            code: 'PROFILE_IDENTITY_MISMATCH',
+          });
+        }
+
+        // Profil sudah dibuat (oleh trigger atau proses sebelumnya) dan identitasnya cocok — jangan INSERT ulang!
+        savedProfile = existingProfileById;
+        profileAlreadyExisted = true;
+      } else {
+        // Pastikan email belum dipakai oleh profil dengan UUID berbeda sebelum melakukan INSERT
+        const { data: conflictByEmail, error: conflictByEmailErr } = await supabaseAdmin
+          .from('profiles')
+          .select('id, email')
+          .eq('email', normalizedEmail)
+          .maybeSingle();
+
+        if (conflictByEmailErr && !isSchemaCacheError(conflictByEmailErr)) {
+          return res.status(500).json({
+            error: `Gagal memeriksa konflik email pada tabel profiles: ${conflictByEmailErr.message}`,
+            partialAuthSuccess: true,
+            pendingAuthUserId: userId,
+          });
+        }
+
+        if (conflictByEmail?.id && conflictByEmail.id !== userId) {
+          return res.status(409).json({
+            error: `Email ${normalizedEmail} sudah terdaftar pada profil lain dengan UUID berbeda (${conflictByEmail.id}).`,
+            code: 'PROFILE_EMAIL_CONFLICT',
+          });
+        }
+
+        const profileRow = {
+          id: userId,
+          full_name: normalizedName,
+          email: normalizedEmail,
+          role: normalizedRole,
+          nip: normalizedNip,
+          phone: normalizedPhone,
+          department: normalizedDepartment,
+          avatar_initials: initials,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        };
+
+        // 6. Jika profil belum tersedia, simpan ke public.profiles via service-role client
+        const { data: insertedProfile, error: profileError } = await supabaseAdmin
+          .from('profiles')
+          .insert(profileRow)
+          .select('*')
+          .single();
+
+        if (profileError) {
+          // Penanganan race condition jika trigger baru saja menyisipkan baris tepat sebelum INSERT backend
+          if (isDuplicateKeyError(profileError)) {
+            const { data: racedProfile, error: racedErr } = await supabaseAdmin
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .maybeSingle();
+
+            if (!racedErr && racedProfile?.id) {
+              const identityCheck = validateProfileIdentity({
+                profile: racedProfile,
+                expectedUserId: userId,
+                authEmail,
+                expectedEmail: normalizedEmail,
+                expectedName: normalizedName,
+                expectedRole: normalizedRole,
+              });
+
+              if (!identityCheck.ok) {
+                return res.status(409).json({
+                  error: identityCheck.error,
+                  code: 'PROFILE_IDENTITY_MISMATCH',
+                });
+              }
+
+              savedProfile = racedProfile;
+              profileAlreadyExisted = true;
+            }
+          }
+
+          if (!savedProfile) {
+            const schemaMismatch = isSchemaCacheError(profileError);
+            // Pertahankan UUID Auth agar Admin dapat mencoba ulang via "Lanjutkan Simpan Profil" tanpa membuat akun Auth ganda
+            return res.status(500).json({
+              error: schemaMismatch
+                ? `Akun Auth sudah dibuat (UUID: ${userId}), namun gagal menyimpan ke tabel profiles karena skema database belum lengkap: ${profileError.message}. Klik "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)" setelah skema diperbarui.`
+                : `Akun Auth sudah dibuat (UUID: ${userId}), namun gagal menyimpan ke tabel profiles: ${profileError.message}. Anda dapat mencoba ulang menggunakan tombol "Lanjutkan Simpan Profil (Tanpa Buat Auth Baru)".`,
+              partialAuthSuccess: true,
+              pendingAuthUserId: userId,
+              schemaMismatch,
+              code: schemaMismatch ? 'PROFILES_SCHEMA_MISMATCH' : 'PROFILES_SAVE_FAILED',
+            });
+          }
+        } else {
+          savedProfile = insertedProfile || profileRow;
+        }
       }
 
       // 7. Catat ke audit_logs secara non-blokir
@@ -426,7 +579,12 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           action: isContinuingProfile ? 'ADMIN_CONTINUE_SAVE_PROFILE' : 'ADMIN_CREATE_USER',
           entity_type: 'profiles',
           entity_id: userId,
-          details: { email: normalizedEmail, role: normalizedRole, fullName: normalizedName },
+          details: {
+            email: normalizedEmail,
+            role: normalizedRole,
+            fullName: normalizedName,
+            profileSource: profileAlreadyExisted ? 'existing_verified' : 'backend_inserted',
+          },
           created_at: new Date().toISOString(),
         });
       } catch {}
@@ -435,10 +593,15 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
         success: true,
         emailConfirmed: Boolean(confirmedEmailAt),
         emailConfirmedAt: confirmedEmailAt,
+        profileAlreadyExisted,
         message: isContinuingProfile
-          ? `Email akun terkonfirmasi dan profil untuk ${normalizedName} (${normalizedRole}) berhasil disimpan dengan UUID Auth ${userId}.`
+          ? profileAlreadyExisted
+            ? `Email akun terkonfirmasi dan profil yang sudah tersedia untuk ${normalizedName} (${normalizedRole}) terverifikasi valid (UUID Auth ${userId}).`
+            : `Email akun terkonfirmasi dan profil untuk ${normalizedName} (${normalizedRole}) berhasil disimpan dengan UUID Auth ${userId}.`
+          : profileAlreadyExisted
+          ? `Akun ${normalizedName} (${normalizedRole}) berhasil dibuat, terkonfirmasi, dan profil otomatis dari trigger database telah terverifikasi.`
           : `Akun dan profil untuk ${normalizedName} (${normalizedRole}) berhasil dibuat, terkonfirmasi, dan disimpan.`,
-        user: savedProfile || profileRow,
+        user: savedProfile,
       });
     } catch (err: any) {
       return res
