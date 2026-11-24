@@ -1,4 +1,14 @@
-import { ReportCategory, ReportPriority, ReportStatus } from '../types/report';
+import {
+  CHECKLIST_QUESTIONS,
+  ChecklistItemResponse,
+  JenjangType,
+  ReportCategory,
+  ReportItem,
+  ReportJenjangEntry,
+  ReportPriority,
+  ReportStatus,
+  UserRole,
+} from '../types/report';
 
 export function formatDateTime(dateStr: string): string {
   try {
@@ -72,7 +82,92 @@ export function formatFileSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+export const NEW_CATEGORY_OPTIONS: Array<{ value: ReportCategory; label: string }> = [
+  { value: 'tata_tertib', label: 'Tata Tertib' },
+  { value: 'relasi_perilaku', label: 'Relasi & Perilaku' },
+  { value: 'motivasi', label: 'Motivasi' },
+  { value: 'kedisiplinan', label: 'Kedisiplinan' },
+  { value: 'tata_tertib_perundungan', label: 'Tata Tertib dan Perundungan' },
+  { value: 'kekerasan_relasi', label: 'Kekerasan & Relasi' },
+  { value: 'kesehatan_psikologis', label: 'Kesehatan dan Psikologis' },
+  { value: 'pendidikan_kehadiran', label: 'Pendidikan dan Kehadiran' },
+  { value: 'keselamatan_kekerasan', label: 'Keselamatan dan Kekerasan' },
+  { value: 'hukum_perundungan', label: 'Hukum & Perundungan' },
+  { value: 'kesehatan_keselamatan_diri', label: 'Kesehatan & Keselamatan Diri' },
+  { value: 'ruang_digital_pancasila', label: 'Ruang Digital & Nilai Pancasila' },
+  { value: 'lainnya_manual', label: 'Lainnya (Tulis Manual)' },
+  { value: 'nihil', label: 'Nihil' },
+];
+
+export const LEGACY_CATEGORY_OPTIONS: Array<{ value: ReportCategory; label: string }> = [
+  { value: 'kategori_1', label: 'Tata Tertib, Relasi & Prilaku, Adaptasi dan Motivasi, Kedisiplinan (Lama)' },
+  { value: 'kategori_2', label: 'Tata Tertib & Perundungan, Kekerasan & Relasi, Kesehatan dan Psikologis (Lama)' },
+  { value: 'kategori_3', label: 'Keselamatan & Kekerasan, Hukum & Perlindungan, Kesehatan & Keselamatan Diri (Lama)' },
+  { value: 'kegiatan_asrama', label: 'Kegiatan Asrama & Kebersihan Kamar (Lama)' },
+  { value: 'pengasuhan', label: 'Pengasuhan & Bimbingan Karakter (Lama)' },
+  { value: 'pembelajaran', label: 'Kegiatan Pembelajaran & Kelas (Lama)' },
+  { value: 'keamanan_lingkungan', label: 'Keamanan & Ketertiban Lingkungan (Lama)' },
+];
+
 export const categoryLabels: Record<string, { label: string; subtext: string }> = {
+  // 14 Kategori Resmi Baru
+  tata_tertib: {
+    label: 'Tata Tertib',
+    subtext: 'Kepatuhan aturan sekolah dan asrama',
+  },
+  relasi_perilaku: {
+    label: 'Relasi & Perilaku',
+    subtext: 'Interaksi sosial dan perilaku harian peserta didik',
+  },
+  motivasi: {
+    label: 'Motivasi',
+    subtext: 'Semangat belajar, adaptasi, dan pengembangan diri',
+  },
+  kedisiplinan: {
+    label: 'Kedisiplinan',
+    subtext: 'Ketepatan waktu, piket, dan tanggung jawab rutin',
+  },
+  tata_tertib_perundungan: {
+    label: 'Tata Tertib dan Perundungan',
+    subtext: 'Pencegahan dan penanganan indikasi bullying/perundungan',
+  },
+  kekerasan_relasi: {
+    label: 'Kekerasan & Relasi',
+    subtext: 'Penanganan konflik, relasi interpersonal, dan tindakan agresif',
+  },
+  kesehatan_psikologis: {
+    label: 'Kesehatan dan Psikologis',
+    subtext: 'Kondisi kesehatan fisik, mental, dan konseling peserta didik',
+  },
+  pendidikan_kehadiran: {
+    label: 'Pendidikan dan Kehadiran',
+    subtext: 'Aktivitas belajar mengajar dan kedisiplinan presensi',
+  },
+  keselamatan_kekerasan: {
+    label: 'Keselamatan dan Kekerasan',
+    subtext: 'Keselamatan lingkungan sekolah/asrama dan perlindungan siswa',
+  },
+  hukum_perundungan: {
+    label: 'Hukum & Perundungan',
+    subtext: 'Aspek perlindungan hukum anak dan penanganan pelanggaran berat',
+  },
+  kesehatan_keselamatan_diri: {
+    label: 'Kesehatan & Keselamatan Diri',
+    subtext: 'Keselamatan fisik, pertolongan pertama, dan kesehatan darurat',
+  },
+  ruang_digital_pancasila: {
+    label: 'Ruang Digital & Nilai Pancasila',
+    subtext: 'Etika bermedia digital, toleransi, dan pengamalan nilai Pancasila',
+  },
+  lainnya_manual: {
+    label: 'Lainnya (Tulis Manual)',
+    subtext: 'Kategori khusus sesuai isian manual pelapor',
+  },
+  nihil: {
+    label: 'Nihil',
+    subtext: 'Tidak ada kejadian atau insiden khusus pada hari ini',
+  },
+  // Legacy aliases mapped (dipertahankan penuh agar laporan lama tetap tampil rapi)
   kategori_1: {
     label: 'Tata Tertib, Relasi & Prilaku, Adaptasi dan Motivasi, Kedisiplinan',
     subtext: 'Pembinaan karakter, ketertiban harian, dan motivasi belajar siswa',
@@ -85,11 +180,22 @@ export const categoryLabels: Record<string, { label: string; subtext: string }> 
     label: 'Keselamatan & Kekerasan, Hukum & Perlindungan, Kesehatan & Keselamatan Diri, Ruang Digital & Nilai',
     subtext: 'Perlindungan anak, penanganan kekerasan, keselamatan fisik & etika digital',
   },
-  nihil: {
-    label: 'Nihil',
-    subtext: 'Tidak ada kejadian atau insiden khusus pada hari ini',
+  kegiatan_asrama: {
+    label: 'Kegiatan Asrama & Kebersihan Kamar',
+    subtext: 'Piket kamar dan ketertiban asrama',
   },
-  // Legacy aliases mapped
+  pengasuhan: {
+    label: 'Pengasuhan & Bimbingan Karakter',
+    subtext: 'Pendampingan wali asuh',
+  },
+  pembelajaran: {
+    label: 'Kegiatan Pembelajaran & Kelas',
+    subtext: 'Akademik dan presensi sekolah',
+  },
+  keamanan_lingkungan: {
+    label: 'Keamanan & Ketertiban Lingkungan',
+    subtext: 'Patroli dan pos jaga sekolah',
+  },
   teknis: {
     label: 'Tata Tertib, Relasi & Prilaku, Adaptasi dan Motivasi, Kedisiplinan',
     subtext: 'Pembinaan karakter, ketertiban harian, dan motivasi belajar siswa',
@@ -111,10 +217,19 @@ export const categoryLabels: Record<string, { label: string; subtext: string }> 
     subtext: 'Sarana keselamatan & lingkungan',
   },
   lainnya: {
-    label: 'Tata Tertib, Relasi & Prilaku, Adaptasi dan Motivasi, Kedisiplinan',
-    subtext: 'Laporan umum tata tertib',
+    label: 'Lainnya',
+    subtext: 'Laporan umum tata tertib dan kondisi sekolah/asrama',
   },
 };
+
+export function getCategoryDisplayLabel(category?: string, customCategory?: string): string {
+  const cat = String(category || '').trim();
+  const custom = String(customCategory || '').trim();
+  if (cat === 'lainnya_manual') {
+    return custom ? `Lainnya: ${custom}` : 'Lainnya (Tulis Manual)';
+  }
+  return categoryLabels[cat]?.label || custom || cat || '-';
+}
 
 export const priorityLabels: Record<string, { label: string; description: string; color: string; badge: string }> = {
   ringan: {
@@ -183,3 +298,494 @@ export const statusLabels: Record<ReportStatus, { label: string; colorClass: str
     dotClass: 'bg-rose-500',
   },
 };
+
+// ================= HELPER ENTRI JENJANG & CHECKLIST =================
+
+export function createDefaultChecklistAnswers(): ChecklistItemResponse[] {
+  return CHECKLIST_QUESTIONS.map((question, idx) => ({
+    questionIndex: idx + 1,
+    question,
+    answer: '',
+  }));
+}
+
+export function normalizeChecklistAnswers(
+  rawAnswers?: ChecklistItemResponse[]
+): ChecklistItemResponse[] {
+  const byIndex = new Map<number, ChecklistItemResponse>();
+  if (Array.isArray(rawAnswers)) {
+    rawAnswers.forEach((item, idx) => {
+      const qIndex = Number(item?.questionIndex) || idx + 1;
+      const ans = item?.answer === 'ya' || item?.answer === 'tidak' ? item.answer : '';
+      byIndex.set(qIndex, {
+        questionIndex: qIndex,
+        question: CHECKLIST_QUESTIONS[qIndex - 1] || item?.question || `Pertanyaan ${qIndex}`,
+        answer: ans,
+      });
+    });
+  }
+
+  return CHECKLIST_QUESTIONS.map((question, idx) => {
+    const qIndex = idx + 1;
+    const found = byIndex.get(qIndex);
+    return (
+      found || {
+        questionIndex: qIndex,
+        question,
+        answer: '',
+      }
+    );
+  });
+}
+
+export function createEmptyJenjangEntry(jenjang: JenjangType | '' = ''): ReportJenjangEntry {
+  let rand = '';
+  try {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+      rand = globalThis.crypto.randomUUID().slice(0, 8);
+    }
+  } catch {}
+  if (!rand) {
+    rand = Math.random().toString(36).substring(2, 10);
+  }
+  return {
+    id: `entry-${rand}-${Date.now().toString(36)}`,
+    jenjang,
+    dormitoryType: '',
+    category: '',
+    customCategory: '',
+    priority: 'sedang',
+    mode: 'checklist',
+    checklistAnswers: createDefaultChecklistAnswers(),
+    hasYesAnswer: false,
+    incidentDescription: '',
+  };
+}
+
+export function normalizeJenjangEntry(raw: any, index = 0): ReportJenjangEntry {
+  const mode = raw?.mode === 'other' ? 'other' : 'checklist';
+  const checklistAnswers = normalizeChecklistAnswers(raw?.checklistAnswers);
+  const hasYesAnswer =
+    mode === 'checklist' && checklistAnswers.some((item) => item.answer === 'ya');
+
+  return {
+    id: String(raw?.id || `entry-${index + 1}`),
+    jenjang:
+      raw?.jenjang === 'SRD' || raw?.jenjang === 'SRMP' || raw?.jenjang === 'SRMA'
+        ? raw.jenjang
+        : '',
+    dormitoryType:
+      raw?.dormitoryType === 'Asrama Putera' || raw?.dormitoryType === 'Asrama Puteri'
+        ? raw.dormitoryType
+        : '',
+    category: (raw?.category || '') as ReportCategory | '',
+    customCategory: typeof raw?.customCategory === 'string' ? raw.customCategory : '',
+    priority: (raw?.priority || 'sedang') as ReportPriority,
+    mode,
+    checklistAnswers,
+    hasYesAnswer,
+    incidentDescription:
+      typeof raw?.incidentDescription === 'string' ? raw.incidentDescription : '',
+  };
+}
+
+export function entryHasYesFindings(entry: ReportJenjangEntry): boolean {
+  if (entry.mode !== 'checklist') return false;
+  if (Array.isArray(entry.checklistAnswers)) {
+    return entry.checklistAnswers.some((a) => a.answer === 'ya');
+  }
+  return Boolean(entry.hasYesAnswer);
+}
+
+export function reportHasYesFindings(report: ReportItem): boolean {
+  if (!Array.isArray(report.entries) || report.entries.length === 0) return false;
+  return report.entries.some((entry) => entryHasYesFindings(entry));
+}
+
+export interface EntryValidationErrors {
+  jenjang?: string;
+  dormitoryType?: string;
+  category?: string;
+  customCategory?: string;
+  checklist?: string;
+  unansweredIndices?: number[];
+  incidentDescription?: string;
+}
+
+export function validateJenjangEntries(entries: ReportJenjangEntry[]): {
+  valid: boolean;
+  entryErrors: Record<string, EntryValidationErrors>;
+  firstErrorMessage?: string;
+} {
+  const entryErrors: Record<string, EntryValidationErrors> = {};
+  const seenJenjang = new Map<string, string>();
+  let firstErrorMessage: string | undefined;
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return {
+      valid: false,
+      entryErrors,
+      firstErrorMessage: 'Minimal harus terdapat satu entri jenjang laporan.',
+    };
+  }
+
+  entries.forEach((entry, idx) => {
+    const errs: EntryValidationErrors = {};
+    const label = entry.jenjang || `Entri #${idx + 1}`;
+
+    if (!entry.jenjang) {
+      errs.jenjang = 'Pilihan Jenjang wajib diisi (SRD / SRMP / SRMA).';
+      if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.jenjang}`;
+    } else if (seenJenjang.has(entry.jenjang)) {
+      errs.jenjang = `Jenjang ${entry.jenjang} sudah dipilih pada entri lain. Gunakan entri berbeda.`;
+      if (!firstErrorMessage) firstErrorMessage = errs.jenjang;
+    } else {
+      seenJenjang.set(entry.jenjang, entry.id);
+    }
+
+    if (!entry.dormitoryType) {
+      errs.dormitoryType = 'Jenis Asrama wajib diisi (Asrama Putera / Asrama Puteri).';
+      if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.dormitoryType}`;
+    }
+
+    if (!entry.category) {
+      errs.category = 'Kategori laporan wajib dipilih.';
+      if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.category}`;
+    } else if (entry.category === 'lainnya_manual' && !String(entry.customCategory || '').trim()) {
+      errs.customCategory = 'Kategori manual wajib ditulis saat memilih "Lainnya (Tulis Manual)".';
+      if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.customCategory}`;
+    }
+
+    if (entry.mode === 'checklist') {
+      const normalizedAnswers = normalizeChecklistAnswers(entry.checklistAnswers);
+      const unansweredIndices = normalizedAnswers
+        .filter((item) => item.answer !== 'ya' && item.answer !== 'tidak')
+        .map((item) => item.questionIndex);
+
+      if (unansweredIndices.length > 0) {
+        errs.unansweredIndices = unansweredIndices;
+        errs.checklist = `Semua 10 pertanyaan checklist wajib dijawab (belum dijawab: No. ${unansweredIndices.join(', ')}).`;
+        if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.checklist}`;
+      }
+
+      const hasYes = normalizedAnswers.some((item) => item.answer === 'ya');
+      if (hasYes && !String(entry.incidentDescription || '').trim()) {
+        errs.incidentDescription =
+          'Deskripsi kejadian wajib diisi karena terdapat minimal satu jawaban "Ya" pada checklist.';
+        if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.incidentDescription}`;
+      }
+    } else {
+      if (!String(entry.incidentDescription || '').trim()) {
+        errs.incidentDescription =
+          'Deskripsi kejadian wajib diisi pada mode Laporan Kejadian Lainnya.';
+        if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.incidentDescription}`;
+      }
+    }
+
+    if (Object.keys(errs).length > 0) {
+      entryErrors[entry.id] = errs;
+    }
+  });
+
+  return {
+    valid: Object.keys(entryErrors).length === 0,
+    entryErrors,
+    firstErrorMessage,
+  };
+}
+
+const PRIORITY_RANK: Record<string, number> = {
+  berat: 4,
+  tinggi: 4,
+  sedang: 3,
+  ringan: 2,
+  rendah: 2,
+  nihil: 1,
+};
+
+export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): {
+  jenjang: string;
+  category: ReportCategory;
+  customCategory?: string;
+  priority: ReportPriority;
+  description: string;
+  normalizedEntries: ReportJenjangEntry[];
+} {
+  const normalizedEntries = entries.map((entry, idx) => {
+    const normalized = normalizeJenjangEntry(entry, idx);
+    if (normalized.mode === 'checklist') {
+      const hasYes = entryHasYesFindings(normalized);
+      return {
+        ...normalized,
+        hasYesAnswer: hasYes,
+        incidentDescription: hasYes ? String(normalized.incidentDescription || '').trim() : '',
+      };
+    }
+    return {
+      ...normalized,
+      hasYesAnswer: false,
+      incidentDescription: String(normalized.incidentDescription || '').trim(),
+    };
+  });
+
+  const jenjang = normalizedEntries
+    .map((e) => e.jenjang)
+    .filter(Boolean)
+    .join(', ');
+
+  const primaryEntry = normalizedEntries[0];
+  const category = (primaryEntry?.category || 'tata_tertib') as ReportCategory;
+  const customCategory =
+    primaryEntry?.category === 'lainnya_manual' ? primaryEntry.customCategory?.trim() : undefined;
+
+  let highestPriority: ReportPriority = primaryEntry?.priority || 'sedang';
+  let highestRank = PRIORITY_RANK[highestPriority] || 0;
+  for (const entry of normalizedEntries) {
+    const rank = PRIORITY_RANK[entry.priority] || 0;
+    if (rank > highestRank) {
+      highestRank = rank;
+      highestPriority = entry.priority;
+    }
+  }
+
+  const descriptionParts = normalizedEntries.map((entry) => {
+    const catLabel = getCategoryDisplayLabel(entry.category, entry.customCategory);
+    const prioLabel = priorityLabels[entry.priority]?.label || entry.priority;
+    const header = `[${entry.jenjang || '-'} · ${entry.dormitoryType || '-'} · ${catLabel} · ${prioLabel}]`;
+
+    if (entry.mode === 'checklist') {
+      const yesItems = (entry.checklistAnswers || []).filter((q) => q.answer === 'ya');
+      if (yesItems.length === 0) {
+        return `${header}\nChecklist Kondisi Sekolah/Asrama: Seluruh kondisi yang diperiksa dalam checklist dinyatakan Tidak ditemukan.`;
+      }
+      const yesNums = yesItems.map((q) => `No.${q.questionIndex}`).join(', ');
+      return `${header}\nChecklist Kondisi Sekolah/Asrama (${yesItems.length} temuan Ya: ${yesNums}):\n${entry.incidentDescription || '-'}`;
+    }
+
+    return `${header}\nLaporan Kejadian Lainnya:\n${entry.incidentDescription || '-'}`;
+  });
+
+  return {
+    jenjang,
+    category,
+    customCategory,
+    priority: highestPriority,
+    description: descriptionParts.join('\n\n'),
+    normalizedEntries,
+  };
+}
+
+export function getReportEntriesSummaryCategories(report: ReportItem): string {
+  if (Array.isArray(report.entries) && report.entries.length > 0) {
+    const labels = report.entries.map((entry) =>
+      getCategoryDisplayLabel(entry.category, entry.customCategory)
+    );
+    return Array.from(new Set(labels)).join(' · ');
+  }
+  return getCategoryDisplayLabel(report.category, report.customCategory);
+}
+
+export function getReportJenjangBadgeList(report: ReportItem): JenjangType[] {
+  if (Array.isArray(report.entries) && report.entries.length > 0) {
+    return report.entries
+      .map((e) => e.jenjang)
+      .filter((j): j is JenjangType => j === 'SRD' || j === 'SRMP' || j === 'SRMA');
+  }
+  if (report.jenjang) {
+    return report.jenjang
+      .split(',')
+      .map((s) => s.trim())
+      .filter((j): j is JenjangType => j === 'SRD' || j === 'SRMP' || j === 'SRMA');
+  }
+  return [];
+}
+
+export function reportMatchesCategory(report: ReportItem, filterCat: string): boolean {
+  if (!filterCat || filterCat === 'all') return true;
+  if (report.category === filterCat) return true;
+  if (Array.isArray(report.entries)) {
+    return report.entries.some((entry) => entry.category === filterCat);
+  }
+  return false;
+}
+
+export function reportMatchesJenjang(report: ReportItem, filterJenjang: string): boolean {
+  if (!filterJenjang || filterJenjang === 'all') return true;
+  const list = getReportJenjangBadgeList(report);
+  return list.includes(filterJenjang as JenjangType);
+}
+
+export function reportMatchesPriority(report: ReportItem, filterPriority: string): boolean {
+  if (!filterPriority || filterPriority === 'all') return true;
+  const matchVal = (val: string) => {
+    if (filterPriority === 'ringan') return val === 'ringan' || val === 'rendah';
+    if (filterPriority === 'berat') return val === 'berat' || val === 'tinggi';
+    return val === filterPriority;
+  };
+  if (matchVal(report.priority)) return true;
+  if (Array.isArray(report.entries)) {
+    return report.entries.some((entry) => matchVal(entry.priority));
+  }
+  return false;
+}
+
+export function reportMatchesSearchQuery(report: ReportItem, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+
+  if (report.title.toLowerCase().includes(q)) return true;
+  if (report.id.toLowerCase().includes(q)) return true;
+  if (formatReportTicketNumber(report).toLowerCase().includes(q)) return true;
+  if (report.description.toLowerCase().includes(q)) return true;
+  if (report.reporterName.toLowerCase().includes(q)) return true;
+  if ((report.location || '').toLowerCase().includes(q)) return true;
+  if ((report.jenjang || '').toLowerCase().includes(q)) return true;
+  if (getCategoryDisplayLabel(report.category, report.customCategory).toLowerCase().includes(q)) {
+    return true;
+  }
+
+  if (Array.isArray(report.entries)) {
+    for (const entry of report.entries) {
+      if ((entry.jenjang || '').toLowerCase().includes(q)) return true;
+      if ((entry.dormitoryType || '').toLowerCase().includes(q)) return true;
+      if (getCategoryDisplayLabel(entry.category, entry.customCategory).toLowerCase().includes(q)) {
+        return true;
+      }
+      if ((entry.customCategory || '').toLowerCase().includes(q)) return true;
+      if ((entry.incidentDescription || '').toLowerCase().includes(q)) return true;
+      if (priorityLabels[entry.priority]?.label.toLowerCase().includes(q)) return true;
+    }
+  }
+
+  return false;
+}
+
+const EXPLICIT_STAFF_ROLES = new Set<string>([
+  'admin',
+  'wali_asrama',
+  'wali_asuh',
+  'guru',
+  'tenaga_keamanan',
+  'keamanan',
+]);
+
+export function isKepalaSekolahReporter(
+  report: Pick<ReportItem, 'userRole' | 'picRole'>
+): boolean {
+  const roleRaw = String(report.userRole || '').trim().toLowerCase();
+  if (roleRaw === 'kepala_sekolah') {
+    return true;
+  }
+  if (roleRaw && EXPLICIT_STAFF_ROLES.has(roleRaw)) {
+    return false;
+  }
+  const picRoleRaw = String(report.picRole || '').trim().toLowerCase();
+  return picRoleRaw.includes('kepala sekolah');
+}
+
+export function getReporterRoleDisplayLabel(
+  report: Pick<ReportItem, 'userRole' | 'picRole' | 'reporterDept'>
+): string {
+  if (isKepalaSekolahReporter(report)) {
+    return 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang';
+  }
+  const roleRaw = String(report.userRole || '').trim().toLowerCase();
+  if (roleRaw === 'wali_asrama') return 'Wali Asrama';
+  if (roleRaw === 'wali_asuh') return 'Wali Asuh';
+  if (roleRaw === 'guru') return 'Guru';
+  if (roleRaw === 'tenaga_keamanan' || roleRaw === 'keamanan') return 'Tenaga Keamanan';
+  if (roleRaw === 'admin') return 'Administrator Sistem';
+
+  const picRole = String(report.picRole || '').trim();
+  if (picRole && !picRole.toLowerCase().includes('kepala sekolah')) {
+    return picRole;
+  }
+  if (report.reporterDept && report.reporterDept.trim()) {
+    return report.reporterDept.trim();
+  }
+  return 'Staf / Petugas';
+}
+
+export function entryIsNihil(
+  entry: Pick<ReportJenjangEntry, 'category' | 'priority'>
+): boolean {
+  return entry.category === 'nihil' || entry.priority === 'nihil';
+}
+
+export function isReportWhollyNihil(report: ReportItem): boolean {
+  if (Array.isArray(report.entries) && report.entries.length > 0) {
+    return report.entries.every((entry) => entryIsNihil(entry));
+  }
+  return report.category === 'nihil' || report.priority === 'nihil';
+}
+
+export interface DeleteReportActor {
+  id?: string;
+  roleKey?: UserRole | string;
+  isActive?: boolean;
+}
+
+export interface DeleteReportPermissionResult {
+  allowed: boolean;
+  isOwner: boolean;
+  reason?: string;
+}
+
+export function canDeleteReport(
+  report: Pick<ReportItem, 'id' | 'status' | 'userId'> | null | undefined,
+  actor: DeleteReportActor | null | undefined
+): DeleteReportPermissionResult {
+  if (!report) {
+    return {
+      allowed: false,
+      isOwner: false,
+      reason: 'Data laporan tidak ditemukan.',
+    };
+  }
+
+  const actorId = String(actor?.id || '').trim();
+  if (!actorId) {
+    return {
+      allowed: false,
+      isOwner: false,
+      reason: 'Sesi pengguna tidak valid untuk menghapus laporan.',
+    };
+  }
+
+  if (actor?.isActive === false) {
+    return {
+      allowed: false,
+      isOwner: false,
+      reason: 'Akun pengguna tidak aktif sehingga tidak dapat menghapus laporan.',
+    };
+  }
+
+  const normalizedRole = String(actor?.roleKey || 'guru').trim().toLowerCase();
+  const isKepalaSekolah = normalizedRole === 'kepala_sekolah';
+  const isOwner = Boolean(report.userId && report.userId === actorId);
+
+  if (report.status !== 'selesai') {
+    return {
+      allowed: false,
+      isOwner,
+      reason:
+        'Laporan yang belum berstatus Selesai tidak dapat dihapus. Hanya laporan berstatus Selesai yang boleh dihapus.',
+    };
+  }
+
+  if (!isOwner && !isKepalaSekolah) {
+    return {
+      allowed: false,
+      isOwner: false,
+      reason:
+        'Anda tidak berhak menghapus laporan milik pengguna lain. Hanya pemilik laporan atau Kepala Sekolah yang dapat menghapus laporan berstatus Selesai.',
+    };
+  }
+
+  return {
+    allowed: true,
+    isOwner,
+  };
+}
+
+

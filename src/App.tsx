@@ -25,7 +25,6 @@ import { KemensosLogo } from './components/KemensosLogo';
 import { 
   getSupabaseClient, 
   mapDbReportToReportItem, 
-  mapReportItemToDbRow,
   logAuditEvent,
   generateUniqueReportId,
   mapDbNotificationToNotificationItem,
@@ -33,11 +32,18 @@ import {
   fetchNotificationsFromSupabase,
   markNotificationsReadInSupabase,
   submitReportToSupabase,
+  updateReportInSupabase,
+  updateReportStatusInSupabase,
+  addReportNoteInSupabase,
+  deleteReportInSupabase,
+  deleteReportsInSupabase,
   resolveReportForNotification,
   normalizeReportUserRole,
-  SubmitReportResult
+  SubmitReportResult,
+  DeleteReportResult,
+  DeleteReportsBulkResult
 } from './lib/supabase';
-import { formatReportTicketNumber } from './utils/formatters';
+import { formatReportTicketNumber, canDeleteReport } from './utils/formatters';
 
 function SIBAHARAppContent() {
   const { 
@@ -82,6 +88,7 @@ function SIBAHARAppContent() {
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('all');
   const [selectedReportForDetail, setSelectedReportForDetail] = useState<ReportItem | null>(null);
   const [notificationOpenError, setNotificationOpenError] = useState<string | null>(null);
+  const [reportActionError, setReportActionError] = useState<string | null>(null);
   const [isLoadingNotifReport, setIsLoadingNotifReport] = useState(false);
   const [isOpenMobileSidebar, setIsOpenMobileSidebar] = useState(false);
 
@@ -343,6 +350,12 @@ function SIBAHARAppContent() {
   };
 
   const handleDeleteDraft = (draftId: string) => {
+    const target = reports.find((r) => r.id === draftId);
+    // Hanya draft lokal yang belum pernah masuk tabel public.reports yang boleh dibersihkan di memori/localStorage
+    if (!target || target.status !== 'draft' || !target.id.startsWith('draft-')) {
+      return;
+    }
+
     setReports((prev) => {
       const updated = prev.filter((r) => r.id !== draftId);
       try {
@@ -350,68 +363,93 @@ function SIBAHARAppContent() {
       } catch {}
       return updated;
     });
-    const client = getSupabaseClient();
-    if (client) {
-      client.from('reports').delete().eq('id', draftId).then(
-        ({ error }) => {
-          if (error) console.warn('Supabase draft delete warning:', error.message);
-        },
-        () => {}
-      );
-    }
   };
 
-  const handleEditReport = (updatedReport: ReportItem) => {
-    setReports((prev) => prev.map((r) => (r.id === updatedReport.id ? updatedReport : r)));
-    if (selectedReportForDetail?.id === updatedReport.id) {
-      setSelectedReportForDetail(updatedReport);
+  const handleEditReport = async (updatedReport: ReportItem): Promise<SubmitReportResult> => {
+    // Draft lokal yang belum pernah masuk tabel reports Supabase dapat diperbarui langsung di state
+    if (updatedReport.status === 'draft' && updatedReport.id.startsWith('draft-')) {
+      setReports((prev) => prev.map((r) => (r.id === updatedReport.id ? updatedReport : r)));
+      if (selectedReportForDetail?.id === updatedReport.id) {
+        setSelectedReportForDetail(updatedReport);
+      }
+      return { success: true, report: updatedReport };
     }
 
-    // Sync to Supabase
     const client = getSupabaseClient();
-    if (client) {
-      client
-        .from('reports')
-        .update(mapReportItemToDbRow(
-          updatedReport, 
-          updatedReport.userId || currentUser.id || 'usr-default', 
-          updatedReport.userRole || currentUser.roleKey || 'guru'
-        ))
-        .eq('id', updatedReport.id)
-        .then(
-          ({ error }) => {
-            if (error) console.warn('Supabase update error:', error.message);
-          },
-          (err: any) => {
-            console.warn('Supabase update network warning (Failed to fetch):', err?.message || err);
-          }
-        );
+    const result = await updateReportInSupabase(client, updatedReport, currentUser);
+
+    if (!result.success || !result.report) {
+      return {
+        success: false,
+        error: result.error || 'Gagal memperbarui laporan ke database Supabase.',
+      };
+    }
+
+    const confirmedReport = result.report;
+
+    setReports((prev) =>
+      prev.map((r) => (r.id === confirmedReport.id ? confirmedReport : r))
+    );
+    if (selectedReportForDetail?.id === confirmedReport.id) {
+      setSelectedReportForDetail(confirmedReport);
     }
 
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
-      title: `Laporan #${updatedReport.id} Diperbarui`,
-      message: `Data laporan "${updatedReport.title}" telah diperbarui.`,
+      title: `Laporan #${formatReportTicketNumber(confirmedReport)} Diperbarui`,
+      message: `Data laporan "${confirmedReport.title}" telah diperbarui di Supabase.`,
       time: 'Baru saja',
       read: false,
       type: 'system',
-      reportId: updatedReport.id,
+      reportId: confirmedReport.id,
     };
     setNotifications((prev) => [newNotif, ...prev]);
 
-    // Record audit event
     logAuditEvent({
       userId: currentUser.id,
       userEmail: currentUser.email,
       userRole: currentUser.roleKey,
       action: 'UPDATE_REPORT',
       resourceType: 'reports',
-      resourceId: updatedReport.id,
-      details: { title: updatedReport.title, status: updatedReport.status }
+      resourceId: confirmedReport.id,
+      details: { title: confirmedReport.title, status: confirmedReport.status },
     });
+
+    return {
+      success: true,
+      report: confirmedReport,
+    };
   };
 
-  const handleDeleteReport = async (reportId: string) => {
+  const handleDeleteReport = async (reportId: string): Promise<DeleteReportResult> => {
+    setReportActionError(null);
+    const targetReport =
+      reports.find((r) => r.id === reportId) ||
+      (selectedReportForDetail?.id === reportId ? selectedReportForDetail : undefined);
+
+    if (!targetReport) {
+      const errMsg = 'Data laporan tidak ditemukan untuk dihapus.';
+      setReportActionError(errMsg);
+      return { success: false, error: errMsg };
+    }
+
+    const permission = canDeleteReport(targetReport, currentUser);
+    if (!permission.allowed) {
+      const errMsg =
+        permission.reason || 'Anda tidak memiliki hak akses untuk menghapus laporan ini.';
+      setReportActionError(errMsg);
+      return { success: false, error: errMsg };
+    }
+
+    const client = getSupabaseClient();
+    const result = await deleteReportInSupabase(client, targetReport, currentUser);
+
+    if (!result.success) {
+      const errMsg = result.error || 'Gagal menghapus laporan dari database Supabase.';
+      setReportActionError(errMsg);
+      return { success: false, error: errMsg };
+    }
+
     setReports((prev) => {
       const updated = prev.filter((r) => r.id !== reportId);
       try {
@@ -423,31 +461,16 @@ function SIBAHARAppContent() {
       setSelectedReportForDetail(null);
     }
 
-    // Sync deletion to Supabase (reports & notifications)
-    const client = getSupabaseClient();
-    if (client) {
-      try {
-        const { error: repErr } = await client.from('reports').delete().eq('id', reportId);
-        if (repErr) console.warn('Supabase delete report error:', repErr.message);
-
-        const { error: notifErr } = await client.from('notifications').delete().eq('report_id', reportId);
-        if (notifErr) console.warn('Supabase delete report notifications warning:', notifErr.message);
-      } catch (err: any) {
-        console.warn('Supabase delete network warning (Failed to fetch):', err?.message || err);
-      }
-    }
-
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
       title: 'Laporan Dihapus',
-      message: `Tiket #${reportId} telah dihapus dari sistem SIBAHAR.`,
+      message: `Tiket #${formatReportTicketNumber(targetReport)} telah dihapus dari sistem SIBAHAR.`,
       time: 'Baru saja',
       read: false,
       type: 'system',
     };
     setNotifications((prev) => [newNotif, ...prev]);
 
-    // Record audit event
     logAuditEvent({
       userId: currentUser.id,
       userEmail: currentUser.email,
@@ -455,61 +478,67 @@ function SIBAHARAppContent() {
       action: 'DELETE_REPORT',
       resourceType: 'reports',
       resourceId: reportId,
-      details: {}
+      details: { status: targetReport.status, ownerId: targetReport.userId },
     });
+
+    return { success: true, deletedId: reportId };
   };
 
-  const handleDeleteReportsByRange = async (startDate: string, endDate: string) => {
+  const handleDeleteReportsByRange = async (
+    startDate: string,
+    endDate: string
+  ): Promise<DeleteReportsBulkResult> => {
+    setReportActionError(null);
     const start = startDate ? new Date(startDate).getTime() : 0;
     const end = endDate ? new Date(endDate + 'T23:59:59').getTime() : Infinity;
 
     const toDelete = reports.filter((r) => {
       const d = new Date(r.incidentDate || r.createdAt).getTime();
-      return d >= start && d <= end;
+      if (d < start || d > end) return false;
+      return canDeleteReport(r, currentUser).allowed;
     });
 
-    const count = toDelete.length;
-    if (count === 0) return;
+    if (toDelete.length === 0) {
+      return {
+        success: false,
+        deletedIds: [],
+        error:
+          'Tidak ada laporan milik Anda yang berstatus Selesai dalam rentang tanggal tersebut.',
+      };
+    }
 
-    const idsToDelete = toDelete.map((r) => r.id);
+    const client = getSupabaseClient();
+    const result = await deleteReportsInSupabase(client, toDelete, currentUser);
 
+    if (!result.success || result.deletedIds.length === 0) {
+      const errMsg = result.error || 'Gagal menghapus kumpulan laporan dari database Supabase.';
+      setReportActionError(errMsg);
+      return { success: false, deletedIds: [], error: errMsg };
+    }
+
+    const confirmedSet = new Set(result.deletedIds);
     setReports((prev) => {
-      const updated = prev.filter((r) => {
-        const d = new Date(r.incidentDate || r.createdAt).getTime();
-        return !(d >= start && d <= end);
-      });
+      const updated = prev.filter((r) => !confirmedSet.has(r.id));
       try {
         localStorage.setItem('sibahar_items', JSON.stringify(updated));
       } catch {}
       return updated;
     });
 
-    if (selectedReportForDetail && idsToDelete.includes(selectedReportForDetail.id)) {
+    if (selectedReportForDetail && confirmedSet.has(selectedReportForDetail.id)) {
       setSelectedReportForDetail(null);
-    }
-
-    // Sync bulk deletion to Supabase
-    const client = getSupabaseClient();
-    if (client && idsToDelete.length > 0) {
-      try {
-        const { error } = await client.from('reports').delete().in('id', idsToDelete);
-        if (error) console.warn('Supabase bulk delete reports error:', error.message);
-      } catch (err: any) {
-        console.warn('Supabase bulk delete network warning:', err?.message || err);
-      }
     }
 
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
       title: 'Pembersihan Riwayat Laporan',
-      message: `${count} laporan dalam rentang tanggal ${startDate || 'Awal'} s/d ${endDate || 'Sekarang'} telah dihapus dari sistem SIBAHAR.`,
+      message: `${result.deletedIds.length} laporan selesai dalam rentang tanggal ${startDate || 'Awal'} s/d ${endDate || 'Sekarang'} telah dihapus dari sistem SIBAHAR.`,
       time: 'Baru saja',
       read: false,
       type: 'system',
     };
     setNotifications((prev) => [newNotif, ...prev]);
 
-    // Record audit event
     logAuditEvent({
       userId: currentUser.id,
       userEmail: currentUser.email,
@@ -517,135 +546,135 @@ function SIBAHARAppContent() {
       action: 'DELETE_REPORTS_RANGE',
       resourceType: 'reports',
       resourceId: 'BULK',
-      details: { startDate, endDate, count }
+      details: { startDate, endDate, count: result.deletedIds.length },
     });
+
+    return {
+      success: true,
+      deletedIds: result.deletedIds,
+    };
   };
 
-  const handleUpdateStatus = (reportId: string, newStatus: ReportStatus, note?: string) => {
-    const now = new Date();
-    const timeFormatted = now.toLocaleDateString('id-ID', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }) + ' ' + now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  const handleUpdateStatus = async (
+    reportId: string,
+    newStatus: ReportStatus,
+    note?: string
+  ): Promise<SubmitReportResult> => {
+    const targetReport =
+      reports.find((r) => r.id === reportId) ||
+      (selectedReportForDetail?.id === reportId ? selectedReportForDetail : undefined);
 
-    let actionLabel = 'Pembaruan Status';
-    if (newStatus === 'diproses') actionLabel = 'Sedang Ditangani';
-    if (newStatus === 'selesai') actionLabel = 'Kasus Selesai / Teratasi';
-    if (newStatus === 'ditolak') actionLabel = 'Laporan Ditolak / Dibatalkan';
+    if (!targetReport) {
+      return {
+        success: false,
+        error: 'Data laporan tidak ditemukan untuk diperbarui.',
+      };
+    }
 
-    setReports((prev) =>
-      prev.map((r) => {
-        if (r.id === reportId) {
-          const updated = {
-            ...r,
-            status: newStatus,
-            logs: [
-              ...r.logs,
-              {
-                id: 'log-' + Math.random().toString(36).substring(2, 9),
-                timestamp: timeFormatted,
-                actor: currentUser.name,
-                action: actionLabel,
-                note: note || undefined,
-              },
-            ],
-          };
-
-          // Sync status to Supabase
-          const client = getSupabaseClient();
-          if (client) {
-            client
-              .from('reports')
-              .update({ status: newStatus, logs: updated.logs, updated_at: now.toISOString() })
-              .eq('id', reportId)
-              .then(
-                ({ error }) => {
-                  if (error) console.warn('Supabase status update error:', error.message);
-                },
-                (err: any) => {
-                  console.warn('Supabase status update network warning (Failed to fetch):', err?.message || err);
-                }
-              );
-          }
-
-          return updated;
-        }
-        return r;
-      })
+    const client = getSupabaseClient();
+    const result = await updateReportStatusInSupabase(
+      client,
+      targetReport,
+      newStatus,
+      currentUser,
+      note
     );
 
-    // Add notification
+    if (!result.success || !result.report) {
+      return {
+        success: false,
+        error: result.error || 'Gagal memperbarui status laporan ke database Supabase.',
+      };
+    }
+
+    const confirmedReport = result.report;
+
+    setReports((prev) =>
+      prev.some((r) => r.id === confirmedReport.id)
+        ? prev.map((r) => (r.id === confirmedReport.id ? confirmedReport : r))
+        : [confirmedReport, ...prev]
+    );
+    if (selectedReportForDetail?.id === confirmedReport.id) {
+      setSelectedReportForDetail(confirmedReport);
+    }
+
     const newNotif: NotificationItem = {
       id: 'notif-' + Date.now(),
-      title: `Status #${reportId} Diperbarui`,
+      title: `Status #${formatReportTicketNumber(confirmedReport)} Diperbarui`,
       message: `Status tiket diubah menjadi ${newStatus.toUpperCase()}${note ? `: "${note}"` : '.'}`,
       time: 'Baru saja',
       read: false,
       type: 'status_update',
-      reportId,
+      reportId: confirmedReport.id,
     };
     setNotifications((prev) => [newNotif, ...prev]);
 
-    // Record audit event
     logAuditEvent({
       userId: currentUser.id,
       userEmail: currentUser.email,
       userRole: currentUser.roleKey,
       action: 'UPDATE_STATUS',
       resourceType: 'reports',
-      resourceId: reportId,
-      details: { newStatus, note }
+      resourceId: confirmedReport.id,
+      details: { newStatus, note },
     });
+
+    return {
+      success: true,
+      report: confirmedReport,
+    };
   };
 
-  const handleAddNote = (reportId: string, note: string) => {
-    const now = new Date();
-    const timeFormatted = now.toLocaleDateString('id-ID', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }) + ' ' + now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  const handleAddNote = async (
+    reportId: string,
+    note: string
+  ): Promise<SubmitReportResult> => {
+    const targetReport =
+      reports.find((r) => r.id === reportId) ||
+      (selectedReportForDetail?.id === reportId ? selectedReportForDetail : undefined);
+
+    if (!targetReport) {
+      return {
+        success: false,
+        error: 'Data laporan tidak ditemukan untuk menambahkan catatan.',
+      };
+    }
+
+    const client = getSupabaseClient();
+    const result = await addReportNoteInSupabase(client, targetReport, note, currentUser);
+
+    if (!result.success || !result.report) {
+      return {
+        success: false,
+        error: result.error || 'Gagal menyimpan catatan laporan ke database Supabase.',
+      };
+    }
+
+    const confirmedReport = result.report;
 
     setReports((prev) =>
-      prev.map((r) => {
-        if (r.id === reportId) {
-          const updatedLogs = [
-            ...r.logs,
-            {
-              id: 'log-' + Math.random().toString(36).substring(2, 9),
-              timestamp: timeFormatted,
-              actor: currentUser.name,
-              action: 'Catatan Tindak Lanjut',
-              note,
-            },
-          ];
-
-          // Sync note log to Supabase
-          const client = getSupabaseClient();
-          if (client) {
-            client
-              .from('reports')
-              .update({ logs: updatedLogs, updated_at: now.toISOString() })
-              .eq('id', reportId)
-              .then(
-                ({ error }) => {
-                  if (error) console.warn('Supabase log note update error:', error.message);
-                },
-                (err: any) => {
-                  console.warn('Supabase log note update network warning (Failed to fetch):', err?.message || err);
-                }
-              );
-          }
-
-          return {
-            ...r,
-            logs: updatedLogs,
-          };
-        }
-        return r;
-      })
+      prev.some((r) => r.id === confirmedReport.id)
+        ? prev.map((r) => (r.id === confirmedReport.id ? confirmedReport : r))
+        : [confirmedReport, ...prev]
     );
+    if (selectedReportForDetail?.id === confirmedReport.id) {
+      setSelectedReportForDetail(confirmedReport);
+    }
+
+    logAuditEvent({
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      userRole: currentUser.roleKey,
+      action: 'ADD_REPORT_NOTE',
+      resourceType: 'reports',
+      resourceId: confirmedReport.id,
+      details: { note },
+    });
+
+    return {
+      success: true,
+      report: confirmedReport,
+    };
   };
 
   // Requirement 7: Sinkronisasi NIP atau data profil pengguna ke seluruh laporan & database Supabase
@@ -904,6 +933,24 @@ function SIBAHARAppContent() {
               </button>
             </div>
           )}
+          {reportActionError && (
+            <div
+              role="alert"
+              className="mb-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-start justify-between gap-3"
+            >
+              <div>
+                <p className="font-bold">Penghapusan Laporan Tidak Diizinkan / Gagal</p>
+                <p className="text-rose-800 mt-0.5">{reportActionError}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReportActionError(null)}
+                className="text-rose-600 hover:text-rose-900 font-semibold shrink-0 px-2 py-0.5 rounded hover:bg-rose-100 transition"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
           {currentTab === 'dashboard' && (
             <MainDashboardView
               reports={reports}
@@ -958,6 +1005,7 @@ function SIBAHARAppContent() {
               currentUserName={currentUser.name}
               currentUserEmail={currentUser.email}
               currentUserRole={currentRole}
+              currentUserIsActive={currentUser.isActive}
             />
           )}
 

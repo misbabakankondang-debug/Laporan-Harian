@@ -7,23 +7,42 @@ import {
   RefreshCw,
   Plus,
   Pencil,
-  Trash2
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
-import { ReportItem, ReportPriority, UserRole, USER_ROLES } from '../types/report';
-import { categoryLabels, priorityLabels, statusLabels, formatDateOnly, formatReportTicketNumber } from '../utils/formatters';
+import { ReportItem, UserRole, USER_ROLES, JENJANG_OPTIONS } from '../types/report';
+import { 
+  priorityLabels, 
+  statusLabels, 
+  formatDateOnly, 
+  formatReportTicketNumber,
+  NEW_CATEGORY_OPTIONS,
+  LEGACY_CATEGORY_OPTIONS,
+  getCategoryDisplayLabel,
+  getReportEntriesSummaryCategories,
+  getReportJenjangBadgeList,
+  reportHasYesFindings,
+  reportMatchesCategory,
+  reportMatchesJenjang,
+  reportMatchesPriority,
+  reportMatchesSearchQuery,
+  canDeleteReport
+} from '../utils/formatters';
 import { EditReportModal } from './EditReportModal';
+import { SubmitReportResult, DeleteReportResult } from '../lib/supabase';
 
 interface HistoryTrackingViewProps {
   reports: ReportItem[];
   onViewReportDetail: (report: ReportItem) => void;
   onNavigateToCreate: () => void;
-  onEditReport: (report: ReportItem) => void;
-  onDeleteReport: (reportId: string) => void;
+  onEditReport: (report: ReportItem) => Promise<SubmitReportResult>;
+  onDeleteReport: (reportId: string) => Promise<DeleteReportResult> | void;
   initialStatusFilter?: string;
   currentUserId?: string;
   currentUserName?: string;
   currentUserEmail?: string;
   currentUserRole?: UserRole;
+  currentUserIsActive?: boolean;
 }
 
 export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
@@ -37,47 +56,31 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
   currentUserName,
   currentUserEmail,
   currentUserRole = 'kepala_sekolah',
+  currentUserIsActive = true,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>(initialStatusFilter);
+  const [selectedJenjang, setSelectedJenjang] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedPriority, setSelectedPriority] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'priority'>('date_desc');
   const [editingReport, setEditingReport] = useState<ReportItem | null>(null);
+  const [confirmDeleteReport, setConfirmDeleteReport] = useState<ReportItem | null>(null);
+  const [isDeletingReport, setIsDeletingReport] = useState(false);
+  const [deleteReportError, setDeleteReportError] = useState('');
 
   // Filter logic
   const filteredReports = useMemo(() => {
     return reports.filter((item) => {
-      // Search
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchTitle = item.title.toLowerCase().includes(q);
-        const matchId = item.id.toLowerCase().includes(q) || formatReportTicketNumber(item).toLowerCase().includes(q);
-        const matchDesc = item.description.toLowerCase().includes(q);
-        const matchReporter = item.reporterName.toLowerCase().includes(q);
-        const matchLoc = (item.location || '').toLowerCase().includes(q);
-        if (!matchTitle && !matchId && !matchDesc && !matchReporter && !matchLoc) {
-          return false;
-        }
-      }
+      if (!reportMatchesSearchQuery(item, searchQuery)) return false;
 
-      // Status
-      if (selectedStatus !== 'all') {
-        if (item.status !== selectedStatus) return false;
-      }
+      if (selectedStatus !== 'all' && item.status !== selectedStatus) return false;
 
-      // Category
-      if (selectedCategory !== 'all') {
-        if (item.category !== selectedCategory) return false;
-      }
+      if (!reportMatchesJenjang(item, selectedJenjang)) return false;
 
-      // Priority
-      if (selectedPriority !== 'all') {
-        if (selectedPriority === 'ringan' && item.priority !== 'ringan' && item.priority !== 'rendah') return false;
-        if (selectedPriority === 'sedang' && item.priority !== 'sedang') return false;
-        if (selectedPriority === 'berat' && item.priority !== 'berat' && item.priority !== 'tinggi') return false;
-        if (selectedPriority === 'nihil' && item.priority !== 'nihil') return false;
-      }
+      if (!reportMatchesCategory(item, selectedCategory)) return false;
+
+      if (!reportMatchesPriority(item, selectedPriority)) return false;
 
       return true;
     }).sort((a, b) => {
@@ -93,7 +96,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
       }
       return 0;
     });
-  }, [reports, searchQuery, selectedStatus, selectedCategory, selectedPriority, sortBy]);
+  }, [reports, searchQuery, selectedStatus, selectedJenjang, selectedCategory, selectedPriority, sortBy]);
 
   // Status counts for badge tabs
   const statusCounts = useMemo(() => {
@@ -111,8 +114,10 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
   const handleExportCSV = () => {
     const headers = [
       'ID Tiket',
+      'Jenjang',
       'Judul Laporan',
       'Kategori',
+      'Rincian Per Jenjang',
       'Prioritas',
       'Tanggal Kejadian',
       'Status',
@@ -121,17 +126,28 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
       'Petugas Penanggung Jawab',
     ];
 
-    const rows = filteredReports.map((r) => [
-      formatReportTicketNumber(r),
-      `"${r.title.replace(/"/g, '""')}"`,
-      `"${categoryLabels[r.category]?.label || r.category}"`,
-      `"${priorityLabels[r.priority]?.label || r.priority}"`,
-      r.incidentDate,
-      statusLabels[r.status]?.label || r.status,
-      `"${r.reporterName}"`,
-      `"${r.reporterDept}"`,
-      `"${r.assignedTo || 'Belum ditugaskan'}"`,
-    ]);
+    const rows = filteredReports.map((r) => {
+      const jenjangText = getReportJenjangBadgeList(r).join(', ') || r.jenjang || '-';
+      const entriesText = Array.isArray(r.entries) && r.entries.length > 0
+        ? r.entries
+            .map((e) => `${e.jenjang} (${e.dormitoryType}): ${getCategoryDisplayLabel(e.category, e.customCategory)} [${priorityLabels[e.priority]?.label || e.priority}]`)
+            .join(' | ')
+        : getCategoryDisplayLabel(r.category, r.customCategory);
+
+      return [
+        formatReportTicketNumber(r),
+        `"${jenjangText.replace(/"/g, '""')}"`,
+        `"${r.title.replace(/"/g, '""')}"`,
+        `"${getReportEntriesSummaryCategories(r).replace(/"/g, '""')}"`,
+        `"${entriesText.replace(/"/g, '""')}"`,
+        `"${priorityLabels[r.priority]?.label || r.priority}"`,
+        r.incidentDate,
+        statusLabels[r.status]?.label || r.status,
+        `"${r.reporterName.replace(/"/g, '""')}"`,
+        `"${r.reporterDept.replace(/"/g, '""')}"`,
+        `"${(r.assignedTo || 'Belum ditugaskan').replace(/"/g, '""')}"`,
+      ];
+    });
 
     const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [
       headers.join(','),
@@ -149,7 +165,8 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
 
   const handleDeleteClick = (e: React.MouseEvent, report: ReportItem) => {
     e.stopPropagation();
-    onDeleteReport(report.id);
+    setDeleteReportError('');
+    setConfirmDeleteReport(report);
   };
 
   const handleEditClick = (e: React.MouseEvent, report: ReportItem) => {
@@ -160,6 +177,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
   const resetAllFilters = () => {
     setSearchQuery('');
     setSelectedStatus('all');
+    setSelectedJenjang('all');
     setSelectedCategory('all');
     setSelectedPriority('all');
     setSortBy('date_desc');
@@ -232,7 +250,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
         </div>
 
         {/* Search input + Dropdown filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-1">
           {/* Search box */}
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
@@ -240,25 +258,43 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cari ID tiket, judul, lokasi..."
+              placeholder="Cari tiket, judul, jenjang, kategori..."
               className="w-full pl-9 pr-3.5 py-2 text-xs rounded-lg border border-slate-300 focus:outline-hidden focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
 
-          {/* Category dropdown (Updated with exact requested categories) */}
+          {/* Jenjang dropdown */}
+          <select
+            value={selectedJenjang}
+            onChange={(e) => setSelectedJenjang(e.target.value)}
+            className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-indigo-500 text-slate-700"
+          >
+            <option value="all">Semua Jenjang</option>
+            {JENJANG_OPTIONS.map((j) => (
+              <option key={j} value={j}>{j}</option>
+            ))}
+          </select>
+
+          {/* Category dropdown */}
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
             className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-indigo-500 text-slate-700"
           >
             <option value="all">Semua Kategori</option>
-            <option value="kategori_1">Tata Tertib, Relasi &amp; Prilaku, Adaptasi...</option>
-            <option value="kategori_2">Tata Tertib &amp; Perundungan, Kekerasan &amp; Relasi...</option>
-            <option value="kategori_3">Keselamatan &amp; Kekerasan, Hukum &amp; Perlindungan...</option>
-            <option value="nihil">Nihil</option>
+            <optgroup label="Kategori Resmi Baru">
+              {NEW_CATEGORY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Kategori Lama (Kompatibilitas)">
+              {LEGACY_CATEGORY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </optgroup>
           </select>
 
-          {/* Priority dropdown (Updated with exact requested priorities) */}
+          {/* Priority dropdown */}
           <select
             value={selectedPriority}
             onChange={(e) => setSelectedPriority(e.target.value)}
@@ -318,6 +354,9 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                 filteredReports.map((report) => {
                   const prio = priorityLabels[report.priority] || priorityLabels.sedang;
                   const stat = statusLabels[report.status] || statusLabels.menunggu;
+                  const jenjangBadges = getReportJenjangBadgeList(report);
+                  const hasYes = reportHasYesFindings(report);
+                  const entries = Array.isArray(report.entries) ? report.entries : [];
 
                   return (
                     <tr
@@ -326,26 +365,56 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                       className="hover:bg-slate-50/80 transition cursor-pointer group"
                     >
                       {/* ID Tiket */}
-                      <td className="py-3.5 px-4 font-mono font-semibold text-indigo-700 whitespace-nowrap">
-                        {formatReportTicketNumber(report)}
+                      <td className="py-3.5 px-4 font-mono font-semibold text-indigo-700 whitespace-nowrap align-top">
+                        <div>{formatReportTicketNumber(report)}</div>
+                        {jenjangBadges.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {jenjangBadges.map((j) => (
+                              <span
+                                key={j}
+                                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-900 border border-emerald-200 font-sans"
+                              >
+                                {j}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </td>
 
                       {/* Judul & Kategori */}
-                      <td className="py-3.5 px-4 min-w-[240px] max-w-sm">
-                        <p className="font-semibold text-slate-900 group-hover:text-indigo-600 transition truncate" title={report.title}>
-                          {report.title}
-                        </p>
-                        <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-                          <span className="text-slate-600 font-medium truncate max-w-[200px]" title={categoryLabels[report.category]?.label || report.category}>
-                            {categoryLabels[report.category]?.label || report.category}
-                          </span>
-                          {report.location && (
-                            <>
-                              <span>·</span>
-                              <span className="truncate max-w-[120px]">{report.location}</span>
-                            </>
+                      <td className="py-3.5 px-4 min-w-[250px] max-w-sm align-top">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="font-semibold text-slate-900 group-hover:text-indigo-600 transition truncate max-w-[260px]" title={report.title}>
+                            {report.title}
+                          </p>
+                          {hasYes && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                              <AlertTriangle className="w-2.5 h-2.5" />
+                              Temuan Ya
+                            </span>
                           )}
                         </div>
+                        {entries.length > 0 ? (
+                          <div className="space-y-0.5 mt-1">
+                            {entries.map((ent) => (
+                              <p key={ent.id} className="text-[11px] text-slate-600 truncate">
+                                <strong className="text-emerald-800">{ent.jenjang}</strong> · {ent.dormitoryType || '-'} · {getCategoryDisplayLabel(ent.category, ent.customCategory)}
+                              </p>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                            <span className="text-slate-600 font-medium truncate max-w-[200px]" title={getCategoryDisplayLabel(report.category, report.customCategory)}>
+                              {getCategoryDisplayLabel(report.category, report.customCategory)}
+                            </span>
+                            {report.location && (
+                              <>
+                                <span>·</span>
+                                <span className="truncate max-w-[120px]">{report.location}</span>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* Tanggal Kejadian */}
@@ -398,36 +467,33 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                             <Eye className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Sesuai Hak Akses RBAC:
-                              - Pemilik laporan selalu dapat mengedit & menghapus laporannya sendiri.
-                              - Kepala Sekolah dapat menghapus laporan masuk yang sudah berstatus Selesai.
+                          {/* Sesuai Kebijakan RBAC Tahap 2.2:
+                              - Pemilik laporan dapat mengedit laporannya sendiri.
+                              - Penghapusan laporan HANYA diizinkan apabila status === 'selesai',
+                                dan hanya oleh pemilik laporan (auth.uid() = user_id) atau Kepala Sekolah.
+                              - Tidak ada role selain Kepala Sekolah yang dapat menghapus laporan pengguna lain.
                           */}
                           {(() => {
-                            const isOwner =
+                            const isOwnerForEdit =
                               (report.userId && currentUserId && report.userId === currentUserId) ||
                               (currentUserName && report.reporterName?.toLowerCase() === currentUserName.toLowerCase()) ||
                               (currentUserEmail && report.reporterEmail?.toLowerCase() === currentUserEmail.toLowerCase()) ||
                               (!report.userId && currentUserRole !== 'kepala_sekolah');
-                            const canEditDelete = currentUserRole !== 'kepala_sekolah' || isOwner;
-                            const canKepsekDeleteCompleted = currentUserRole === 'kepala_sekolah' && !isOwner && report.status === 'selesai';
+                            const canEdit = currentUserRole !== 'kepala_sekolah' || isOwnerForEdit;
+                            const deletePermission = canDeleteReport(report, {
+                              id: currentUserId,
+                              roleKey: currentUserRole,
+                              isActive: currentUserIsActive,
+                            });
 
-                            if (!canEditDelete) {
-                              if (canKepsekDeleteCompleted) {
-                                return (
-                                  <button
-                                    onClick={(e) => handleDeleteClick(e, report)}
-                                    className="px-2 py-1 text-rose-700 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-md border border-rose-200 transition flex items-center gap-1 text-[11px] font-semibold cursor-pointer"
-                                    title="Hapus Laporan yang Sudah Selesai"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                    <span>Hapus</span>
-                                  </button>
-                                );
-                              }
+                            if (!canEdit && !deletePermission.allowed) {
                               return (
-                                <span 
+                                <span
                                   className="text-[10.5px] font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded border border-slate-200 cursor-not-allowed"
-                                  title="Wewenang Kepala Sekolah: Hanya Baca (Dapat dihapus setelah ditandai Selesai)"
+                                  title={
+                                    deletePermission.reason ||
+                                    'Wewenang Kepala Sekolah: Hanya Baca (Dapat dihapus setelah ditandai Selesai)'
+                                  }
                                 >
                                   Hanya Baca
                                 </span>
@@ -436,23 +502,30 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
 
                             return (
                               <>
-                                {/* Edit Menu */}
-                                <button
-                                  onClick={(e) => handleEditClick(e, report)}
-                                  className="p-1.5 text-slate-600 bg-slate-100 hover:bg-amber-50 hover:text-amber-700 rounded-md transition cursor-pointer"
-                                  title="Edit Laporan Milik Sendiri"
-                                >
-                                  <Pencil className="w-3.5 h-3.5" />
-                                </button>
+                                {canEdit && (
+                                  <button
+                                    onClick={(e) => handleEditClick(e, report)}
+                                    className="p-1.5 text-slate-600 bg-slate-100 hover:bg-amber-50 hover:text-amber-700 rounded-md transition cursor-pointer"
+                                    title="Edit Laporan Milik Sendiri"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
 
-                                {/* Hapus Menu */}
-                                <button
-                                  onClick={(e) => handleDeleteClick(e, report)}
-                                  className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-md transition cursor-pointer"
-                                  title="Hapus Laporan Milik Sendiri"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                {deletePermission.allowed && (
+                                  <button
+                                    onClick={(e) => handleDeleteClick(e, report)}
+                                    className={
+                                      !canEdit
+                                        ? 'px-2 py-1 text-rose-700 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-md border border-rose-200 transition flex items-center gap-1 text-[11px] font-semibold cursor-pointer'
+                                        : 'p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-md transition cursor-pointer'
+                                    }
+                                    title="Hapus Laporan yang Sudah Selesai"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    {!canEdit && <span>Hapus</span>}
+                                  </button>
+                                )}
                               </>
                             );
                           })()}
@@ -481,11 +554,77 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
           report={editingReport}
           isOpen={Boolean(editingReport)}
           onClose={() => setEditingReport(null)}
-          onSave={(updated) => {
-            onEditReport(updated);
-            setEditingReport(null);
+          currentUserName={currentUserName}
+          onSave={async (updated) => {
+            const res = await onEditReport(updated);
+            if (res.success) {
+              setEditingReport(null);
+            }
+            return res;
           }}
         />
+      )}
+
+      {/* Modal Konfirmasi Hapus Laporan Selesai */}
+      {confirmDeleteReport && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full border border-rose-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-5 h-5" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="font-bold text-slate-900 text-sm">Hapus Laporan Selesai?</h3>
+              <p className="text-xs text-slate-600">
+                Laporan <strong>#{formatReportTicketNumber(confirmDeleteReport)}</strong> ({confirmDeleteReport.title}) sudah berstatus <strong>Selesai</strong>. Apakah Anda yakin ingin menghapusnya dari sistem dan database Supabase?
+              </p>
+            </div>
+
+            {deleteReportError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs text-left">
+                {deleteReportError}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingReport}
+                onClick={() => {
+                  setConfirmDeleteReport(null);
+                  setDeleteReportError('');
+                }}
+                className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingReport}
+                onClick={async () => {
+                  if (isDeletingReport) return;
+                  setDeleteReportError('');
+                  setIsDeletingReport(true);
+                  try {
+                    const res = await onDeleteReport(confirmDeleteReport.id);
+                    if (res && typeof res === 'object' && !res.success) {
+                      setDeleteReportError(
+                        res.error || 'Gagal menghapus laporan dari database Supabase.'
+                      );
+                      return;
+                    }
+                    setConfirmDeleteReport(null);
+                  } finally {
+                    setIsDeletingReport(false);
+                  }
+                }}
+                className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-xs cursor-pointer"
+              >
+                {isDeletingReport ? 'Menghapus...' : 'Ya, Hapus Laporan'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

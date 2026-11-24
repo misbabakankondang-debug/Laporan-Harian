@@ -41,7 +41,9 @@ import {
   getEnvSupabaseUrl,
   getEnvSupabaseKey,
   SupabaseConnectionStatus,
+  DeleteReportsBulkResult,
 } from '../lib/supabase';
+import { canDeleteReport } from '../utils/formatters';
 import { FULL_SUPABASE_SCHEMA_SQL } from '../data/supabaseSchema';
 
 interface SettingsViewProps {
@@ -51,7 +53,7 @@ interface SettingsViewProps {
   onSaveProfile: (profile: UserProfile) => void;
   onSaveSettings: (settings: AppSettings) => void;
   onResetToDefault: () => void;
-  onDeleteReportsByRange?: (startDate: string, endDate: string) => void;
+  onDeleteReportsByRange?: (startDate: string, endDate: string) => Promise<DeleteReportsBulkResult> | void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -79,7 +81,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Profile fields
   const [name, setName] = useState(userProfile.name);
-  const [nip, setNip] = useState(userProfile.nip || '19780706 200501 1 011');
+  const [nip, setNip] = useState(userProfile.nip || '');
   const [email, setEmail] = useState(userProfile.email);
   const [phone, setPhone] = useState(userProfile.phone);
   const [department, setDepartment] = useState(userProfile.department);
@@ -163,6 +165,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [deleteUserError, setDeleteUserError] = useState('');
   const [userMgmtSuccessMsg, setUserMgmtSuccessMsg] = useState('');
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
+  const [bulkDeleteSuccess, setBulkDeleteSuccess] = useState('');
 
   // User Profile Photo State
   const [userAvatarUrl, setUserAvatarUrl] = useState<string>(userProfile.avatarUrl || '');
@@ -181,16 +186,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   }, []);
 
-  // Count reports in range for preview
+  // Count eligible reports in range (hanya laporan milik sendiri yang sudah berstatus Selesai)
   const matchingDeleteCount = useMemo(() => {
     if (!reports || reports.length === 0) return 0;
     const start = deleteStartDate ? new Date(deleteStartDate).getTime() : 0;
     const end = deleteEndDate ? new Date(deleteEndDate + 'T23:59:59').getTime() : Infinity;
     return reports.filter((r) => {
       const d = new Date(r.incidentDate || r.createdAt).getTime();
-      return d >= start && d <= end;
+      if (d < start || d > end) return false;
+      return canDeleteReport(r, userProfile).allowed;
     }).length;
-  }, [reports, deleteStartDate, deleteEndDate]);
+  }, [reports, deleteStartDate, deleteEndDate, userProfile]);
 
   const handleTestConnection = async () => {
     if (!isAdmin) return;
@@ -283,21 +289,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleExecuteDateRangeDelete = () => {
     if (!isAdmin) {
-      alert('Hanya akun Admin yang berwenang menghapus riwayat laporan secara massal.');
+      alert('Hanya akun Admin yang berwenang mengakses fitur pembersihan riwayat ini.');
       return;
     }
     if (matchingDeleteCount === 0) {
-      alert('Tidak ada laporan yang ditemukan dalam rentang tanggal tersebut.');
+      alert('Tidak ada laporan milik Anda yang berstatus Selesai dalam rentang tanggal tersebut.');
       return;
     }
+    setBulkDeleteError('');
+    setBulkDeleteSuccess('');
     setShowBulkDeleteModal(true);
   };
 
-  const handleConfirmBulkDelete = () => {
-    if (onDeleteReportsByRange) {
-      onDeleteReportsByRange(deleteStartDate, deleteEndDate);
+  const handleConfirmBulkDelete = async () => {
+    if (!onDeleteReportsByRange || isBulkDeleting) return;
+    setBulkDeleteError('');
+    setIsBulkDeleting(true);
+    try {
+      const res = await onDeleteReportsByRange(deleteStartDate, deleteEndDate);
+      if (res && typeof res === 'object' && !res.success) {
+        setBulkDeleteError(res.error || 'Gagal menghapus laporan dari database Supabase.');
+        return;
+      }
+      setShowBulkDeleteModal(false);
+      const deletedTotal =
+        res && typeof res === 'object' ? res.deletedIds.length : matchingDeleteCount;
+      setBulkDeleteSuccess(`${deletedTotal} laporan milik Anda yang berstatus Selesai berhasil dihapus.`);
+      setTimeout(() => setBulkDeleteSuccess(''), 4000);
+    } finally {
+      setIsBulkDeleting(false);
     }
-    setShowBulkDeleteModal(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1624,20 +1645,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* Section 7: Hapus Laporan dengan Rentang Waktu (Hanya Admin) */}
+        {/* Section 7: Hapus Laporan Milik Sendiri yang Selesai Berdasarkan Rentang Waktu (Hanya Admin) */}
         {isAdmin && (
           <div className="bg-white p-6 rounded-2xl border border-rose-200 shadow-sm space-y-4">
             <div className="flex items-center gap-2 pb-3 border-b border-rose-100 text-rose-700">
               <Trash2 className="w-5 h-5" />
               <div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Hapus Semua Laporan Berdasarkan Rentang Waktu
+                  Hapus Laporan Milik Sendiri (Status Selesai) Berdasarkan Rentang Waktu
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Pilih periode tanggal kejadian untuk menghapus kumpulan riwayat laporan secara massal
+                  Hanya menghapus laporan milik Anda sendiri yang sudah berstatus Selesai dalam periode terpilih. Laporan milik pengguna lain atau laporan belum selesai tidak dapat dihapus.
                 </p>
               </div>
             </div>
+
+            {bulkDeleteSuccess && (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs flex items-center gap-2 font-medium">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{bulkDeleteSuccess}</span>
+              </div>
+            )}
 
             <div className="space-y-3.5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
@@ -1671,7 +1699,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="p-4 bg-rose-50/70 rounded-xl border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                 <div>
                   <span className="text-rose-900 font-bold block text-sm">
-                    Laporan Terdeteksi: <strong className="font-mono text-base text-rose-700">{matchingDeleteCount}</strong> tiket
+                    Laporan Selesai Milik Anda Terdeteksi: <strong className="font-mono text-base text-rose-700">{matchingDeleteCount}</strong> tiket
                   </span>
                   <span className="text-[11px] text-rose-700 mt-0.5 block">
                     Periode kejadian: {deleteStartDate || 'Awal'} s/d {deleteEndDate || 'Sekarang'}
@@ -2078,26 +2106,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div className="text-center space-y-1">
-              <h3 className="font-bold text-slate-900 text-sm">Hapus {matchingDeleteCount} Laporan?</h3>
+              <h3 className="font-bold text-slate-900 text-sm">Hapus {matchingDeleteCount} Laporan Selesai?</h3>
               <p className="text-xs text-slate-600">
-                Laporan pada rentang tanggal <strong>{deleteStartDate || 'Awal'}</strong> s/d <strong>{deleteEndDate || 'Sekarang'}</strong> akan dihapus permanen dari riwayat dan database Supabase.
+                Hanya laporan milik Anda yang berstatus <strong>Selesai</strong> pada rentang tanggal <strong>{deleteStartDate || 'Awal'}</strong> s/d <strong>{deleteEndDate || 'Sekarang'}</strong> yang akan dihapus permanen dari riwayat dan database Supabase.
               </p>
             </div>
+
+            {bulkDeleteError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs text-left">
+                {bulkDeleteError}
+              </div>
+            )}
 
             <div className="flex items-center gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setShowBulkDeleteModal(false)}
-                className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium"
+                disabled={isBulkDeleting}
+                onClick={() => {
+                  setShowBulkDeleteModal(false);
+                  setBulkDeleteError('');
+                }}
+                className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium disabled:opacity-50"
               >
                 Batal
               </button>
               <button
                 type="button"
+                disabled={isBulkDeleting}
                 onClick={handleConfirmBulkDelete}
-                className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold transition shadow-xs"
+                className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-xs"
               >
-                Ya, Hapus Semua
+                {isBulkDeleting ? 'Menghapus...' : 'Ya, Hapus Semua'}
               </button>
             </div>
           </div>

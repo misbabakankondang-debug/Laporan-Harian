@@ -2,11 +2,18 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   NotificationItem,
   ReportItem,
+  ReportStatus,
   USER_ROLES,
   UserProfile,
   UserRole,
 } from '../types/report';
-import { formatDateTime } from '../utils/formatters';
+import {
+  formatDateTime,
+  normalizeJenjangEntry,
+  validateJenjangEntries,
+  buildReportSummariesFromEntries,
+  canDeleteReport,
+} from '../utils/formatters';
 
 export const EXPECTED_SUPABASE_PROJECT_REF = 'ghpxnwlqpgbglpjgxeus';
 export const EXPECTED_SUPABASE_URL = `https://${EXPECTED_SUPABASE_PROJECT_REF}.supabase.co`;
@@ -1554,17 +1561,53 @@ export async function uploadAttachmentToStorage(
 
 // Konversi format DB Supabase ke ReportItem di UI
 export const mapDbReportToReportItem = (row: any): ReportItem => {
+  let parsedEntriesRaw: any[] = [];
+  if (Array.isArray(row?.entries)) {
+    parsedEntriesRaw = row.entries;
+  } else if (typeof row?.entries === 'string' && row.entries.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(row.entries);
+      if (Array.isArray(parsed)) parsedEntriesRaw = parsed;
+    } catch {}
+  }
+
+  const normalizedEntries = parsedEntriesRaw.map((entry, idx) =>
+    normalizeJenjangEntry(entry, idx)
+  );
+
+  const derivedJenjang =
+    (typeof row?.jenjang === 'string' && row.jenjang.trim()) ||
+    normalizedEntries
+      .map((e) => e.jenjang)
+      .filter(Boolean)
+      .join(', ');
+
+  const rowCustomCategory =
+    typeof row?.custom_category === 'string' && row.custom_category.trim()
+      ? row.custom_category.trim()
+      : undefined;
+
+  const primaryCustomCategory =
+    normalizedEntries.length > 0 && normalizedEntries[0].category === 'lainnya_manual'
+      ? normalizedEntries[0].customCategory || rowCustomCategory
+      : row?.category === 'lainnya_manual'
+      ? rowCustomCategory
+      : undefined;
+
   return {
     id: row.id,
     userId: row.user_id,
     userRole: row.user_role as UserRole,
     title: row.title,
+    jenjang: derivedJenjang || '',
     category: row.category,
+    customCategory: primaryCustomCategory,
     priority: row.priority,
     location: row.location || '',
     incidentDate: row.incident_date,
     createdAt: row.created_at,
     description: row.description,
+    entries: normalizedEntries,
     status: row.status,
     reporterName: row.reporter_name,
     reporterEmail: row.reporter_email || '',
@@ -1582,12 +1625,35 @@ export const mapDbReportToReportItem = (row: any): ReportItem => {
 
 // Konversi ReportItem ke format tabel `reports` Supabase
 export const mapReportItemToDbRow = (item: ReportItem, userId: string, userRole: UserRole) => {
+  const hasEntries = Array.isArray(item.entries) && item.entries.length > 0;
+  const computedJenjang =
+    (item.jenjang && item.jenjang.trim()) ||
+    (hasEntries
+      ? item.entries!
+          .map((e) => e.jenjang)
+          .filter(Boolean)
+          .join(', ')
+      : null);
+
+  const computedCustomCategory =
+    item.category === 'lainnya_manual'
+      ? String(
+          item.customCategory ||
+            (hasEntries && item.entries![0]?.category === 'lainnya_manual'
+              ? item.entries![0]?.customCategory
+              : '') ||
+            ''
+        ).trim() || null
+      : null;
+
   return {
     id: item.id,
     user_id: userId,
     user_role: userRole,
     title: item.title,
+    jenjang: computedJenjang || null,
     category: item.category,
+    custom_category: computedCustomCategory,
     priority: item.priority,
     description: item.description,
     incident_date: item.incidentDate,
@@ -1603,6 +1669,7 @@ export const mapReportItemToDbRow = (item: ReportItem, userId: string, userRole:
     assigned_to: item.assignedTo || '',
     attachments: item.attachments || [],
     logs: item.logs || [],
+    entries: hasEntries ? item.entries : [],
     reporter_signature: item.reporterSignature || null,
     updated_at: new Date().toISOString(),
   };
@@ -1856,8 +1923,32 @@ export async function submitReportToSupabase(
     ' ' +
     now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
+  let preparedReportData = { ...newReportData };
+  if (Array.isArray(newReportData.entries) && newReportData.entries.length > 0) {
+    const entryValidation = validateJenjangEntries(newReportData.entries);
+    if (!entryValidation.valid) {
+      return {
+        success: false,
+        error:
+          entryValidation.firstErrorMessage ||
+          'Isian entri jenjang atau checklist laporan belum lengkap.',
+      };
+    }
+
+    const summary = buildReportSummariesFromEntries(newReportData.entries);
+    preparedReportData = {
+      ...preparedReportData,
+      jenjang: summary.jenjang,
+      category: summary.category,
+      customCategory: summary.customCategory,
+      priority: summary.priority,
+      description: summary.description,
+      entries: summary.normalizedEntries,
+    };
+  }
+
   const newReport: ReportItem = {
-    ...newReportData,
+    ...preparedReportData,
     id: reportId,
     userId: currentUser.id,
     userRole: normalizedRole,
@@ -1969,3 +2060,419 @@ export async function resolveReportForNotification(
     };
   }
 }
+
+async function ensureActiveSupabaseSession(client: any): Promise<string | null> {
+  if (!client) {
+    return 'Koneksi Supabase belum tersedia. Perubahan tidak dapat disimpan ke database.';
+  }
+  try {
+    if (typeof client.auth?.getSession === 'function') {
+      const { data: sessionData, error: sessionErr } = await client.auth.getSession();
+      if (sessionErr || !sessionData?.session?.access_token) {
+        return 'Sesi autentikasi Supabase telah berakhir. Silakan login ulang sebelum menyimpan perubahan.';
+      }
+    }
+  } catch {
+    return 'Gagal memverifikasi sesi autentikasi Supabase sebelum menyimpan perubahan.';
+  }
+  return null;
+}
+
+export async function updateReportInSupabase(
+  client: any,
+  updatedReport: ReportItem,
+  actorUser?: UserProfile
+): Promise<SubmitReportResult> {
+  const sessionErr = await ensureActiveSupabaseSession(client);
+  if (sessionErr) {
+    return { success: false, error: sessionErr };
+  }
+
+  const reportId = String(updatedReport?.id || '').trim();
+  if (!reportId) {
+    return { success: false, error: 'ID laporan tidak valid untuk diperbarui.' };
+  }
+
+  const effectiveUserId = String(updatedReport.userId || actorUser?.id || '').trim();
+  if (!effectiveUserId || !UUID_PATTERN.test(effectiveUserId)) {
+    return {
+      success: false,
+      error: 'Pemilik laporan pada sesi Supabase tidak valid. Silakan muat ulang atau login ulang.',
+    };
+  }
+
+  const effectiveRole = normalizeReportUserRole(updatedReport.userRole || actorUser?.roleKey);
+
+  let preparedReport: ReportItem = { ...updatedReport };
+  if (Array.isArray(updatedReport.entries) && updatedReport.entries.length > 0) {
+    const validation = validateJenjangEntries(updatedReport.entries);
+    if (!validation.valid) {
+      return {
+        success: false,
+        error:
+          validation.firstErrorMessage ||
+          'Isian entri jenjang atau checklist laporan belum lengkap.',
+      };
+    }
+
+    const summary = buildReportSummariesFromEntries(updatedReport.entries);
+    preparedReport = {
+      ...preparedReport,
+      jenjang: summary.jenjang,
+      category: summary.category,
+      customCategory: summary.customCategory,
+      priority: summary.priority,
+      description: summary.description,
+      entries: summary.normalizedEntries,
+    };
+  } else {
+    preparedReport = {
+      ...preparedReport,
+      customCategory:
+        preparedReport.category === 'lainnya_manual'
+          ? String(preparedReport.customCategory || '').trim() || undefined
+          : undefined,
+    };
+  }
+
+  try {
+    const dbPayload = mapReportItemToDbRow(preparedReport, effectiveUserId, effectiveRole);
+    const { data, error } = await client
+      .from('reports')
+      .update(dbPayload)
+      .eq('id', reportId)
+      .select('*')
+      .maybeSingle();
+
+    if (error) {
+      return {
+        success: false,
+        error: formatSupabaseReportError(error, 'memperbarui laporan'),
+      };
+    }
+
+    if (!data) {
+      return {
+        success: false,
+        error:
+          'Perubahan laporan tidak dikonfirmasi oleh database Supabase (data tidak ditemukan atau akses ditolak).',
+      };
+    }
+
+    return {
+      success: true,
+      report: mapDbReportToReportItem(data),
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: formatSupabaseReportError(err, 'memperbarui laporan'),
+    };
+  }
+}
+
+export async function updateReportStatusInSupabase(
+  client: any,
+  currentReport: ReportItem,
+  newStatus: ReportStatus,
+  currentUser: UserProfile,
+  note?: string
+): Promise<SubmitReportResult> {
+  const sessionErr = await ensureActiveSupabaseSession(client);
+  if (sessionErr) {
+    return { success: false, error: sessionErr };
+  }
+
+  const reportId = String(currentReport?.id || '').trim();
+  if (!reportId) {
+    return { success: false, error: 'ID laporan tidak valid untuk pembaruan status.' };
+  }
+
+  const now = new Date();
+  const timeFormatted =
+    now.toLocaleDateString('id-ID', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }) +
+    ' ' +
+    now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+  let actionLabel = 'Pembaruan Status';
+  if (newStatus === 'diproses') actionLabel = 'Sedang Ditangani';
+  if (newStatus === 'selesai') actionLabel = 'Kasus Selesai / Teratasi';
+  if (newStatus === 'ditolak') actionLabel = 'Laporan Ditolak / Dibatalkan';
+
+  const existingLogs = Array.isArray(currentReport.logs) ? currentReport.logs : [];
+  const nextLogs = [
+    ...existingLogs,
+    {
+      id: `log-${generateUniqueReportId().slice(0, 8)}`,
+      timestamp: timeFormatted,
+      actor: currentUser?.name || 'Petugas',
+      action: actionLabel,
+      note: note?.trim() || undefined,
+    },
+  ];
+
+  try {
+    const { data, error } = await client
+      .from('reports')
+      .update({
+        status: newStatus,
+        logs: nextLogs,
+        updated_at: now.toISOString(),
+      })
+      .eq('id', reportId)
+      .select('*')
+      .maybeSingle();
+
+    if (error) {
+      return {
+        success: false,
+        error: formatSupabaseReportError(error, 'memperbarui status laporan'),
+      };
+    }
+
+    if (!data) {
+      return {
+        success: false,
+        error:
+          'Pembaruan status laporan tidak dikonfirmasi oleh database Supabase (data tidak ditemukan atau akses ditolak).',
+      };
+    }
+
+    return {
+      success: true,
+      report: mapDbReportToReportItem(data),
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: formatSupabaseReportError(err, 'memperbarui status laporan'),
+    };
+  }
+}
+
+export async function addReportNoteInSupabase(
+  client: any,
+  currentReport: ReportItem,
+  note: string,
+  currentUser: UserProfile
+): Promise<SubmitReportResult> {
+  const sessionErr = await ensureActiveSupabaseSession(client);
+  if (sessionErr) {
+    return { success: false, error: sessionErr };
+  }
+
+  const reportId = String(currentReport?.id || '').trim();
+  const trimmedNote = String(note || '').trim();
+  if (!reportId) {
+    return { success: false, error: 'ID laporan tidak valid.' };
+  }
+  if (!trimmedNote) {
+    return { success: false, error: 'Catatan tindak lanjut tidak boleh kosong.' };
+  }
+
+  const now = new Date();
+  const timeFormatted =
+    now.toLocaleDateString('id-ID', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }) +
+    ' ' +
+    now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+  const existingLogs = Array.isArray(currentReport.logs) ? currentReport.logs : [];
+  const nextLogs = [
+    ...existingLogs,
+    {
+      id: `log-${generateUniqueReportId().slice(0, 8)}`,
+      timestamp: timeFormatted,
+      actor: currentUser?.name || 'Petugas',
+      action: 'Catatan Tindak Lanjut',
+      note: trimmedNote,
+    },
+  ];
+
+  try {
+    const { data, error } = await client
+      .from('reports')
+      .update({
+        logs: nextLogs,
+        updated_at: now.toISOString(),
+      })
+      .eq('id', reportId)
+      .select('*')
+      .maybeSingle();
+
+    if (error) {
+      return {
+        success: false,
+        error: formatSupabaseReportError(error, 'menambahkan catatan laporan'),
+      };
+    }
+
+    if (!data) {
+      return {
+        success: false,
+        error:
+          'Penambahan catatan tidak dikonfirmasi oleh database Supabase (data tidak ditemukan atau akses ditolak).',
+      };
+    }
+
+    return {
+      success: true,
+      report: mapDbReportToReportItem(data),
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: formatSupabaseReportError(err, 'menambahkan catatan laporan'),
+    };
+  }
+}
+
+export interface DeleteReportResult {
+  success: boolean;
+  deletedId?: string;
+  error?: string;
+}
+
+export interface DeleteReportsBulkResult {
+  success: boolean;
+  deletedIds: string[];
+  error?: string;
+}
+
+export async function deleteReportInSupabase(
+  client: any,
+  targetReport: Pick<ReportItem, 'id' | 'status' | 'userId'>,
+  currentUser: UserProfile
+): Promise<DeleteReportResult> {
+  const permission = canDeleteReport(targetReport, currentUser);
+  if (!permission.allowed) {
+    return {
+      success: false,
+      error:
+        permission.reason ||
+        'Anda tidak memiliki izin untuk menghapus laporan ini.',
+    };
+  }
+
+  const reportId = String(targetReport?.id || '').trim();
+  if (!reportId) {
+    return {
+      success: false,
+      error: 'ID laporan tidak valid untuk dihapus.',
+    };
+  }
+
+  const sessionErr = await ensureActiveSupabaseSession(client);
+  if (sessionErr) {
+    return { success: false, error: sessionErr };
+  }
+
+  try {
+    const { data, error } = await client
+      .from('reports')
+      .delete()
+      .eq('id', reportId)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      return {
+        success: false,
+        error: formatSupabaseReportError(error, 'menghapus laporan'),
+      };
+    }
+
+    if (!data?.id) {
+      return {
+        success: false,
+        error:
+          'Penghapusan laporan ditolak oleh kebijakan database atau laporan sudah tidak tersedia.',
+      };
+    }
+
+    return {
+      success: true,
+      deletedId: String(data.id),
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: formatSupabaseReportError(err, 'menghapus laporan'),
+    };
+  }
+}
+
+export async function deleteReportsInSupabase(
+  client: any,
+  candidateReports: Array<Pick<ReportItem, 'id' | 'status' | 'userId'>>,
+  currentUser: UserProfile
+): Promise<DeleteReportsBulkResult> {
+  const eligible = (candidateReports || []).filter(
+    (r) => canDeleteReport(r, currentUser).allowed
+  );
+
+  if (eligible.length === 0) {
+    return {
+      success: false,
+      deletedIds: [],
+      error:
+        'Tidak ada laporan yang memenuhi syarat penghapusan (hanya laporan milik Anda yang berstatus Selesai yang boleh dihapus).',
+    };
+  }
+
+  const sessionErr = await ensureActiveSupabaseSession(client);
+  if (sessionErr) {
+    return { success: false, deletedIds: [], error: sessionErr };
+  }
+
+  const eligibleIds = eligible.map((r) => r.id).filter(Boolean);
+
+  try {
+    const { data, error } = await client
+      .from('reports')
+      .delete()
+      .in('id', eligibleIds)
+      .select('id');
+
+    if (error) {
+      return {
+        success: false,
+        deletedIds: [],
+        error: formatSupabaseReportError(error, 'menghapus kumpulan laporan'),
+      };
+    }
+
+    const deletedIds = Array.isArray(data)
+      ? data.map((row: any) => String(row?.id || '')).filter(Boolean)
+      : [];
+
+    if (deletedIds.length === 0) {
+      return {
+        success: false,
+        deletedIds: [],
+        error:
+          'Tidak ada laporan yang berhasil dihapus dari database Supabase (akses ditolak oleh kebijakan RLS atau data tidak ditemukan).',
+      };
+    }
+
+    return {
+      success: true,
+      deletedIds,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      deletedIds: [],
+      error: formatSupabaseReportError(err, 'menghapus kumpulan laporan'),
+    };
+  }
+}
+
+

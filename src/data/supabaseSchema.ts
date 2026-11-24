@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS public.reports (
     user_role user_role_type NOT NULL,
     title TEXT NOT NULL,
     category TEXT NOT NULL,
+    custom_category TEXT,
     priority TEXT NOT NULL DEFAULT 'sedang',
     description TEXT NOT NULL,
     incident_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -103,13 +104,19 @@ CREATE TABLE IF NOT EXISTS public.reports (
     attachments JSONB DEFAULT '[]'::jsonb,
     logs JSONB DEFAULT '[]'::jsonb,
     reporter_signature TEXT,
+    jenjang TEXT,
+    entries JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
 ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reporter_signature TEXT;
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS jenjang TEXT;
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS entries JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS custom_category TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON public.reports(user_id);
+CREATE INDEX IF NOT EXISTS idx_reports_jenjang ON public.reports(jenjang);
 CREATE INDEX IF NOT EXISTS idx_reports_incident_date ON public.reports(incident_date DESC);
 CREATE INDEX IF NOT EXISTS idx_reports_category ON public.reports(category);
 CREATE INDEX IF NOT EXISTS idx_reports_status ON public.reports(status);
@@ -275,13 +282,15 @@ CREATE POLICY "Reports UPDATE Policy"
         public.is_user_active() AND (auth.uid() = user_id OR public.is_kepala_sekolah())
     );
 
--- 4. DELETE: Pemilik laporan sendiri atau Kepala Sekolah khusus laporan berstatus Selesai.
+-- 4. DELETE: Hanya laporan berstatus Selesai yang dapat dihapus oleh pemilik laporan sendiri atau Kepala Sekolah.
 CREATE POLICY "Reports DELETE Policy"
     ON public.reports FOR DELETE
     USING (
-        public.is_user_active() AND (
+        auth.uid() IS NOT NULL
+        AND status = 'selesai'
+        AND (
             auth.uid() = user_id
-            OR (public.is_kepala_sekolah() AND status = 'selesai')
+            OR public.is_kepala_sekolah()
         )
     );
 

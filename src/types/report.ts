@@ -8,15 +8,74 @@ export type ReportPriority =
   | 'rendah' // backward compatibility
   | 'tinggi'; // backward compatibility
 
+export type JenjangType = 'SRD' | 'SRMP' | 'SRMA';
+
+export type DormitoryType = 'Asrama Putera' | 'Asrama Puteri';
+
+export type ReportEntryMode = 'checklist' | 'other';
+
+export type ChecklistAnswer = 'ya' | 'tidak';
+
+export const JENJANG_OPTIONS: readonly JenjangType[] = ['SRD', 'SRMP', 'SRMA'];
+
+export const DORMITORY_OPTIONS: readonly DormitoryType[] = ['Asrama Putera', 'Asrama Puteri'];
+
+export const CHECKLIST_QUESTIONS: readonly string[] = [
+  'Apakah hari ini terjadi perundungan (bullying), baik fisik, verbal, sosial, maupun melalui media digital?',
+  'Apakah terjadi dugaan kekerasan fisik, psikis, seksual, atau tindakan yang membahayakan peserta didik?',
+  'Apakah terjadi tindakan diskriminasi, intoleransi, atau konflik terkait agama, suku, maupun perbedaan latar belakang?',
+  'Apakah terdapat peserta didik/SDM SR sakit, dugaan penyakit menular, atau kondisi kesehatan yang memerlukan penanganan khusus?',
+  'Apakah terdapat masalah keamanan, seperti kehilangan, pencurian, peserta didik meninggalkan sekolah tanpa izin, atau ancaman dari luar?',
+  'Apakah terdapat kerusakan atau gangguan fasilitas penting, seperti asrama, toilet, air bersih, listrik, dapur, dan ruang kelas?',
+  'Apakah terdapat kendala penyediaan makanan, kualitas makanan, kebersihan dapur, atau kebutuhan dasar peserta didik?',
+  'Apakah kegiatan pembelajaran hari ini mengalami gangguan signifikan, termasuk ketidakhadiran guru atau keterbatasan sarana belajar?',
+  'Apakah terdapat masalah pengasuhan, kondisi psikososial, konflik antarpeserta didik, atau peserta didik yang memerlukan pendampingan khusus?',
+  'Apakah terdapat kejadian penting lainnya yang berpotensi mengganggu operasional sekolah atau memerlukan perhatian pimpinan?',
+];
+
+export interface ChecklistItemResponse {
+  questionIndex: number; // 1..10
+  question: string;
+  answer: ChecklistAnswer | '';
+}
+
+export interface ReportJenjangEntry {
+  id: string;
+  jenjang: JenjangType | '';
+  dormitoryType: DormitoryType | '';
+  category: ReportCategory | '';
+  customCategory?: string; // Wajib jika category === 'lainnya_manual'
+  priority: ReportPriority;
+  mode: ReportEntryMode;
+  checklistAnswers?: ChecklistItemResponse[];
+  hasYesAnswer?: boolean;
+  incidentDescription?: string;
+}
+
 export type ReportCategory = 
-  | 'kategori_1' // Tata Tertib, Relasi & Prilaku, Adaptasi dan Motivasi, Kedisiplinan
-  | 'kategori_2' // Tata Tertib & Perundungan, Kekerasan & Relasi, Kesehatan dan Psikologis, Pendikan & Kehadiran
-  | 'kategori_3' // Keselamatan & Kekerasan, Hukum & Perlindungan, Kesehatan & Keselamatan Diri, Ruang Digital & Nilai
-  | 'nihil'      // Nihil
-  | 'kegiatan_asrama' // Tambahan kegiatan asrama
-  | 'pengasuhan'      // Pembinaan & pengasuhan
-  | 'pembelajaran'    // Pembelajaran & kelas
-  | 'keamanan_lingkungan' // Keamanan & ketertiban
+  // 14 Kategori Resmi Baru
+  | 'tata_tertib'
+  | 'relasi_perilaku'
+  | 'motivasi'
+  | 'kedisiplinan'
+  | 'tata_tertib_perundungan'
+  | 'kekerasan_relasi'
+  | 'kesehatan_psikologis'
+  | 'pendidikan_kehadiran'
+  | 'keselamatan_kekerasan'
+  | 'hukum_perundungan'
+  | 'kesehatan_keselamatan_diri'
+  | 'ruang_digital_pancasila'
+  | 'lainnya_manual'
+  | 'nihil'
+  // Kategori Lama (dipertahankan untuk kompatibilitas laporan historis)
+  | 'kategori_1'
+  | 'kategori_2'
+  | 'kategori_3'
+  | 'kegiatan_asrama'
+  | 'pengasuhan'
+  | 'pembelajaran'
+  | 'keamanan_lingkungan'
   | 'teknis'
   | 'operasional'
   | 'keuangan'
@@ -103,16 +162,19 @@ export interface ReportLog {
 }
 
 export interface ReportItem {
-  id: string; // e.g. "20261106/001"
+  id: string; // e.g. UUID v4 or legacy "20261106/001"
   userId?: string; // UUID in Supabase
   userRole?: UserRole; // Role of creator
   title: string;
+  jenjang?: string; // Ringkasan jenjang (mis. "SRD" atau "SRD, SRMP, SRMA")
   category: ReportCategory;
+  customCategory?: string; // Jika kategori utama memakai 'lainnya_manual'
   priority: ReportPriority;
   location?: string;
   incidentDate: string;
   createdAt: string;
   description: string;
+  entries?: ReportJenjangEntry[]; // Rincian per jenjang (SRD/SRMP/SRMA) dalam 1 laporan utama
   status: ReportStatus;
   reporterName: string;
   reporterEmail: string;

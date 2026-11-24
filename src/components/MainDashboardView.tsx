@@ -5,14 +5,13 @@ import {
   BarChart3, 
   Clock, 
   CheckCircle2, 
-  AlertCircle, 
+  AlertTriangle,
   Calendar, 
   ArrowRight,
   Eye,
   ShieldCheck,
   Building2,
   PhoneCall,
-  Sparkles,
   Info,
   Users,
   Settings as SettingsIcon,
@@ -24,10 +23,28 @@ import {
   HeartHandshake,
   Trash2
 } from 'lucide-react';
-import { ReportItem, UserProfile, AppSettings, UserRole, USER_ROLES } from '../types/report';
-import { categoryLabels, priorityLabels, statusLabels, formatDateOnly, formatDateTime, formatReportTicketNumber } from '../utils/formatters';
+import { ReportItem, UserProfile, AppSettings, USER_ROLES, JENJANG_OPTIONS } from '../types/report';
+import { 
+  priorityLabels, 
+  statusLabels, 
+  formatDateOnly, 
+  formatReportTicketNumber,
+  NEW_CATEGORY_OPTIONS,
+  LEGACY_CATEGORY_OPTIONS,
+  getCategoryDisplayLabel,
+  getReportEntriesSummaryCategories,
+  getReportJenjangBadgeList,
+  reportHasYesFindings,
+  reportMatchesCategory,
+  reportMatchesJenjang,
+  reportMatchesSearchQuery,
+  isReportWhollyNihil,
+  canDeleteReport,
+} from '../utils/formatters';
+import { countReportsByStaffRole, matchesStaffRoleFilter } from '../utils/statistics';
 import { KemensosLogo } from './KemensosLogo';
 import { useAuth } from '../context/AuthContext';
+import { DeleteReportResult } from '../lib/supabase';
 
 interface MainDashboardViewProps {
   reports: ReportItem[];
@@ -35,7 +52,7 @@ interface MainDashboardViewProps {
   appSettings: AppSettings;
   onNavigateToTab: (tab: 'create' | 'stats' | 'history' | 'settings') => void;
   onViewReport: (report: ReportItem) => void;
-  onDeleteReport?: (reportId: string) => void;
+  onDeleteReport?: (reportId: string) => Promise<DeleteReportResult> | void;
 }
 
 export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
@@ -48,6 +65,8 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
 }) => {
   const { currentRole, allUsersList } = useAuth();
   const [confirmDeleteReport, setConfirmDeleteReport] = useState<ReportItem | null>(null);
+  const [isDeletingReport, setIsDeletingReport] = useState(false);
+  const [deleteReportError, setDeleteReportError] = useState('');
   const isKepalaSekolah = currentRole === 'kepala_sekolah';
   const isAdmin = currentRole === 'admin';
 
@@ -67,41 +86,27 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
 
   // Filter khusus Kepala Sekolah
   const [kepalaFilterRole, setKepalaFilterRole] = useState<string>('all');
+  const [kepalaFilterJenjang, setKepalaFilterJenjang] = useState<string>('all');
   const [kepalaFilterCategory, setKepalaFilterCategory] = useState<string>('all');
   const [kepalaSearchQuery, setKepalaSearchQuery] = useState<string>('');
 
   const filteredKepalaReports = useMemo(() => {
     return accessibleReports.filter((r) => {
-      if (kepalaFilterRole !== 'all' && r.userRole !== kepalaFilterRole) return false;
-      if (kepalaFilterCategory !== 'all' && r.category !== kepalaFilterCategory) return false;
-      if (kepalaSearchQuery.trim()) {
-        const q = kepalaSearchQuery.toLowerCase();
-        const matchTitle = r.title.toLowerCase().includes(q);
-        const matchReporter = r.reporterName.toLowerCase().includes(q);
-        const matchDesc = r.description.toLowerCase().includes(q);
-        const matchId = r.id.toLowerCase().includes(q) || formatReportTicketNumber(r).toLowerCase().includes(q);
-        if (!matchTitle && !matchReporter && !matchDesc && !matchId) return false;
-      }
+      if (!matchesStaffRoleFilter(r, kepalaFilterRole)) return false;
+      if (!reportMatchesJenjang(r, kepalaFilterJenjang)) return false;
+      if (!reportMatchesCategory(r, kepalaFilterCategory)) return false;
+      if (!reportMatchesSearchQuery(r, kepalaSearchQuery)) return false;
       return true;
     });
-  }, [accessibleReports, kepalaFilterRole, kepalaFilterCategory, kepalaSearchQuery]);
+  }, [accessibleReports, kepalaFilterRole, kepalaFilterJenjang, kepalaFilterCategory, kepalaSearchQuery]);
 
-  // Statistik role untuk Kepala Sekolah
-  const countByStaffRole = useMemo(() => {
-    return {
-      wali_asrama: reports.filter((r) => r.userRole === 'wali_asrama').length,
-      wali_asuh: reports.filter((r) => r.userRole === 'wali_asuh').length,
-      guru: reports.filter((r) => r.userRole === 'guru').length,
-      keamanan: reports.filter((r) => r.userRole === 'keamanan').length,
-      admin: reports.filter((r) => r.userRole === 'admin').length,
-      kepala_sekolah: reports.filter((r) => r.userRole === 'kepala_sekolah').length,
-    };
-  }, [reports]);
+  // Statistik role untuk Kepala Sekolah (mendukung role resmi 'tenaga_keamanan' maupun alias lama 'keamanan')
+  const countByStaffRole = useMemo(() => countReportsByStaffRole(reports), [reports]);
 
   const pendingCount = accessibleReports.filter((r) => r.status === 'menunggu').length;
   const inProgressCount = accessibleReports.filter((r) => r.status === 'diproses').length;
   const resolvedCount = accessibleReports.filter((r) => r.status === 'selesai').length;
-  const nihilCount = accessibleReports.filter((r) => r.category === 'nihil' || r.priority === 'nihil').length;
+  const nihilCount = accessibleReports.filter((r) => isReportWhollyNihil(r)).length;
 
   const todayStr = new Intl.DateTimeFormat('id-ID', {
     weekday: 'long',
@@ -488,7 +493,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
             <span className="font-mono text-slate-500">{filteredKepalaReports.length} laporan cocok</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
             {/* Search */}
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
@@ -496,7 +501,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                 type="text"
                 value={kepalaSearchQuery}
                 onChange={(e) => setKepalaSearchQuery(e.target.value)}
-                placeholder="Cari judul, nama pelapor, tiket..."
+                placeholder="Cari judul, jenjang, kategori, pelapor..."
                 className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-emerald-500 text-xs"
               />
             </div>
@@ -511,9 +516,21 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               <option value="wali_asrama">Wali Asrama</option>
               <option value="wali_asuh">Wali Asuh</option>
               <option value="guru">Guru</option>
-              <option value="keamanan">Tenaga Keamanan</option>
+              <option value="tenaga_keamanan">Tenaga Keamanan</option>
               <option value="admin">Admin</option>
               <option value="kepala_sekolah">Kepala Sekolah</option>
+            </select>
+
+            {/* Filter by Jenjang */}
+            <select
+              value={kepalaFilterJenjang}
+              onChange={(e) => setKepalaFilterJenjang(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-emerald-500 text-xs"
+            >
+              <option value="all">Semua Jenjang (SRD / SRMP / SRMA)</option>
+              {JENJANG_OPTIONS.map((j) => (
+                <option key={j} value={j}>{j}</option>
+              ))}
             </select>
 
             {/* Filter by Category */}
@@ -523,14 +540,16 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-emerald-500 text-xs"
             >
               <option value="all">Semua Kategori Laporan</option>
-              <option value="kategori_1">Tata Tertib, Relasi &amp; Adaptasi</option>
-              <option value="kategori_2">Tata Tertib &amp; Perundungan</option>
-              <option value="kategori_3">Keselamatan &amp; Hukum</option>
-              <option value="kegiatan_asrama">Kegiatan Asrama</option>
-              <option value="pengasuhan">Pengasuhan &amp; Karakter</option>
-              <option value="pembelajaran">Pembelajaran &amp; Kelas</option>
-              <option value="keamanan_lingkungan">Keamanan Lingkungan</option>
-              <option value="nihil">Nihil</option>
+              <optgroup label="Kategori Resmi Baru">
+                {NEW_CATEGORY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Kategori Lama (Kompatibilitas)">
+                {LEGACY_CATEGORY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </optgroup>
             </select>
           </div>
         </div>
@@ -570,6 +589,9 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               const prio = priorityLabels[item.priority] || priorityLabels.sedang;
               const stat = statusLabels[item.status] || statusLabels.menunggu;
               const makerRole = item.userRole ? USER_ROLES[item.userRole] : undefined;
+              const jenjangBadges = getReportJenjangBadgeList(item);
+              const itemHasYes = reportHasYesFindings(item);
+              const entries = Array.isArray(item.entries) ? item.entries : [];
 
               return (
                 <div
@@ -577,14 +599,28 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                   onClick={() => onViewReport(item)}
                   className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-emerald-50/40 transition cursor-pointer group"
                 >
-                  <div className="space-y-1 min-w-0 flex-1">
+                  <div className="space-y-1.5 min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap text-xs">
                       <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                         {formatReportTicketNumber(item)}
                       </span>
+                      {jenjangBadges.map((j) => (
+                        <span
+                          key={j}
+                          className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-teal-50 text-teal-900 border border-teal-200"
+                        >
+                          {j}
+                        </span>
+                      ))}
                       {makerRole && (
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${makerRole.badgeClass}`}>
                           {makerRole.label}
+                        </span>
+                      )}
+                      {itemHasYes && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          Ada Temuan Ya
                         </span>
                       )}
                       <span className={`px-2 py-0.5 rounded text-[10.5px] font-medium ${prio.badge}`}>
@@ -601,8 +637,24 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                     </h4>
 
                     <p className="text-xs text-slate-500 line-clamp-1">
-                      {categoryLabels[item.category]?.label || item.category} · Pelapor: <strong className="text-slate-700">{item.reporterName}</strong> {item.reporterDept ? `(${item.reporterDept})` : ''}
+                      {getReportEntriesSummaryCategories(item)} · Pelapor: <strong className="text-slate-700">{item.reporterName}</strong> {item.reporterDept ? `(${item.reporterDept})` : ''}
                     </p>
+
+                    {entries.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        {entries.map((ent) => {
+                          const entPrio = priorityLabels[ent.priority] || priorityLabels.sedang;
+                          return (
+                            <span
+                              key={ent.id}
+                              className="text-[10.5px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200"
+                            >
+                              <strong>{ent.jenjang}</strong> ({ent.dormitoryType || '-'}): {getCategoryDisplayLabel(ent.category, ent.customCategory)} · {entPrio.label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
@@ -628,19 +680,25 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                         <span>Detail</span>
                       </button>
 
-                      {isKepalaSekolah && item.status === 'selesai' && onDeleteReport && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setConfirmDeleteReport(item);
-                          }}
-                          className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-lg border border-rose-200 transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
-                          title="Hapus Laporan yang Sudah Selesai"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Hapus</span>
-                        </button>
-                      )}
+                      {onDeleteReport &&
+                        canDeleteReport(item, {
+                          id: userProfile.id,
+                          roleKey: currentRole,
+                          isActive: userProfile.isActive,
+                        }).allowed && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteReportError('');
+                              setConfirmDeleteReport(item);
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-600 hover:text-white rounded-lg border border-rose-200 transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                            title="Hapus Laporan yang Sudah Selesai"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Hapus</span>
+                          </button>
+                        )}
                     </div>
                   </div>
                 </div>
@@ -686,7 +744,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Modal Konfirmasi Hapus Laporan Selesai (Kepala Sekolah) */}
+      {/* Modal Konfirmasi Hapus Laporan Selesai */}
       {confirmDeleteReport && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full border border-rose-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-150">
@@ -701,25 +759,47 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               </p>
             </div>
 
+            {deleteReportError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs text-left">
+                {deleteReportError}
+              </div>
+            )}
+
             <div className="flex items-center gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setConfirmDeleteReport(null)}
-                className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium cursor-pointer"
+                disabled={isDeletingReport}
+                onClick={() => {
+                  setConfirmDeleteReport(null);
+                  setDeleteReportError('');
+                }}
+                className="flex-1 py-2 text-xs border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition font-medium cursor-pointer disabled:opacity-50"
               >
                 Batal
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (onDeleteReport) {
-                    onDeleteReport(confirmDeleteReport.id);
+                disabled={isDeletingReport}
+                onClick={async () => {
+                  if (!onDeleteReport || isDeletingReport) return;
+                  setDeleteReportError('');
+                  setIsDeletingReport(true);
+                  try {
+                    const res = await onDeleteReport(confirmDeleteReport.id);
+                    if (res && typeof res === 'object' && !res.success) {
+                      setDeleteReportError(
+                        res.error || 'Gagal menghapus laporan dari database Supabase.'
+                      );
+                      return;
+                    }
+                    setConfirmDeleteReport(null);
+                  } finally {
+                    setIsDeletingReport(false);
                   }
-                  setConfirmDeleteReport(null);
                 }}
-                className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold transition shadow-xs cursor-pointer"
+                className="flex-1 py-2 text-xs bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-xs cursor-pointer"
               >
-                Ya, Hapus Laporan
+                {isDeletingReport ? 'Menghapus...' : 'Ya, Hapus Laporan'}
               </button>
             </div>
           </div>
