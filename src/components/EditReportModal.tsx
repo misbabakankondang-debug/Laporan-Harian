@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Save, AlertCircle } from 'lucide-react';
 import { ReportItem, ReportCategory, ReportPriority } from '../types/report';
+import { formatReportTicketNumber } from '../utils/formatters';
 
 interface EditReportModalProps {
   report: ReportItem;
@@ -99,7 +100,7 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
         <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
           <div>
             <h3 className="font-bold text-slate-900 text-base">
-              Edit Data Laporan: <span className="font-mono text-indigo-700">{report.id}</span>
+              Edit Data Laporan: <span className="font-mono text-indigo-700">{formatReportTicketNumber(report)}</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               Perbarui rincian kasus, kategori, urgensi, penanggung jawab, atau deskripsi

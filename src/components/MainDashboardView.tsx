@@ -25,7 +25,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { ReportItem, UserProfile, AppSettings, UserRole, USER_ROLES } from '../types/report';
-import { categoryLabels, priorityLabels, statusLabels, formatDateOnly, formatDateTime } from '../utils/formatters';
+import { categoryLabels, priorityLabels, statusLabels, formatDateOnly, formatDateTime, formatReportTicketNumber } from '../utils/formatters';
 import { KemensosLogo } from './KemensosLogo';
 import { useAuth } from '../context/AuthContext';
 
@@ -79,7 +79,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
         const matchTitle = r.title.toLowerCase().includes(q);
         const matchReporter = r.reporterName.toLowerCase().includes(q);
         const matchDesc = r.description.toLowerCase().includes(q);
-        const matchId = r.id.toLowerCase().includes(q);
+        const matchId = r.id.toLowerCase().includes(q) || formatReportTicketNumber(r).toLowerCase().includes(q);
         if (!matchTitle && !matchReporter && !matchDesc && !matchId) return false;
       }
       return true;
@@ -580,7 +580,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                   <div className="space-y-1 min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap text-xs">
                       <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        {item.id}
+                        {formatReportTicketNumber(item)}
                       </span>
                       {makerRole && (
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${makerRole.badgeClass}`}>
@@ -697,7 +697,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
             <div className="text-center space-y-1">
               <h3 className="font-bold text-slate-900 text-sm">Hapus Laporan Selesai?</h3>
               <p className="text-xs text-slate-600">
-                Laporan <strong>#{confirmDeleteReport.id}</strong> ({confirmDeleteReport.title}) sudah berstatus <strong>Selesai</strong>. Apakah Anda yakin ingin menghapusnya dari sistem dan database Supabase?
+                Laporan <strong>#{formatReportTicketNumber(confirmDeleteReport)}</strong> ({confirmDeleteReport.title}) sudah berstatus <strong>Selesai</strong>. Apakah Anda yakin ingin menghapusnya dari sistem dan database Supabase?
               </p>
             </div>
 

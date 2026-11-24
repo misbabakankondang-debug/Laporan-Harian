@@ -10,7 +10,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { ReportItem, ReportPriority, UserRole, USER_ROLES } from '../types/report';
-import { categoryLabels, priorityLabels, statusLabels, formatDateOnly } from '../utils/formatters';
+import { categoryLabels, priorityLabels, statusLabels, formatDateOnly, formatReportTicketNumber } from '../utils/formatters';
 import { EditReportModal } from './EditReportModal';
 
 interface HistoryTrackingViewProps {
@@ -52,7 +52,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchTitle = item.title.toLowerCase().includes(q);
-        const matchId = item.id.toLowerCase().includes(q);
+        const matchId = item.id.toLowerCase().includes(q) || formatReportTicketNumber(item).toLowerCase().includes(q);
         const matchDesc = item.description.toLowerCase().includes(q);
         const matchReporter = item.reporterName.toLowerCase().includes(q);
         const matchLoc = (item.location || '').toLowerCase().includes(q);
@@ -122,7 +122,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
     ];
 
     const rows = filteredReports.map((r) => [
-      r.id,
+      formatReportTicketNumber(r),
       `"${r.title.replace(/"/g, '""')}"`,
       `"${categoryLabels[r.category]?.label || r.category}"`,
       `"${priorityLabels[r.priority]?.label || r.priority}"`,
@@ -327,7 +327,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                     >
                       {/* ID Tiket */}
                       <td className="py-3.5 px-4 font-mono font-semibold text-indigo-700 whitespace-nowrap">
-                        {report.id}
+                        {formatReportTicketNumber(report)}
                       </td>
 
                       {/* Judul & Kategori */}

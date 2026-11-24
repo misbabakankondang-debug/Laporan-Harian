@@ -22,14 +22,15 @@ import {
   AttachmentFile, 
   UserProfile 
 } from '../types/report';
-import { formatFileSize, formatDateOnly } from '../utils/formatters';
+import { formatFileSize, formatDateOnly, formatReportTicketNumber } from '../utils/formatters';
+import { SubmitReportResult } from '../lib/supabase';
 import { TabType } from './Sidebar';
 import { SignaturePadInput } from './SignaturePadInput';
 
 interface CreateReportViewProps {
   reports: ReportItem[];
   userProfile: UserProfile;
-  onSubmitReport: (newReport: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>) => ReportItem;
+  onSubmitReport: (newReport: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>) => Promise<SubmitReportResult>;
   onSaveDraft: (draftData: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>) => ReportItem;
   onNavigateTab: (tab: TabType, filterStatus?: string) => void;
   onViewReportDetail: (report: ReportItem) => void;
@@ -82,6 +83,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   // Feedback states
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedReport, setSubmittedReport] = useState<ReportItem | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -170,14 +172,16 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
+    setSubmitError(null);
+    setSubmittedReport(null);
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const created = onSubmitReport({
+    try {
+      const result = await onSubmitReport({
         title: title.trim(),
         category: category as ReportCategory,
         priority,
@@ -196,15 +200,25 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         reporterSignature: reporterSignature || undefined,
       });
 
-      // If we were editing a draft, remove the draft
+      if (!result.success || !result.report) {
+        setSubmitError(
+          result.error || 'Gagal menyimpan laporan ke database Supabase. Silakan periksa koneksi atau hak akses lalu coba lagi.'
+        );
+        return;
+      }
+
+      // If we were editing a draft, remove the draft only after Supabase INSERT succeeds
       if (editingDraftId && onDeleteDraft) {
         onDeleteDraft(editingDraftId);
       }
 
-      setIsSubmitting(false);
-      setSubmittedReport(created);
+      setSubmittedReport(result.report);
       resetForm();
-    }, 400);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Terjadi kesalahan saat menyimpan laporan ke Supabase.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSaveDraft = () => {
@@ -327,6 +341,39 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         </button>
       </div>
 
+      {/* Error Banner if Supabase INSERT failed */}
+      {submitError && (
+        <div
+          role="alert"
+          className="bg-rose-50 border border-rose-200 rounded-xl p-5 shadow-xs flex items-start justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-200"
+        >
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-rose-600 text-white rounded-lg shrink-0">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-rose-950">
+                Laporan Gagal Disimpan ke Supabase
+              </h4>
+              <p className="text-xs text-rose-800 mt-1 leading-relaxed">
+                {submitError}
+              </p>
+              <p className="text-[11px] text-rose-700 mt-1">
+                Data formulir Anda tetap dipertahankan agar Anda dapat mencoba mengirim ulang. Notifikasi tidak dikirim sebelum laporan tersimpan di database.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSubmitError(null)}
+            className="p-1.5 text-rose-600 hover:text-rose-900 shrink-0"
+            title="Tutup pesan kesalahan"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Success Banner if newly submitted */}
       {submittedReport && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -336,13 +383,13 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
             </div>
             <div>
               <h4 className="text-sm font-bold text-emerald-950">
-                Laporan Berhasil Diajukan!
+                Laporan Berhasil Disimpan!
               </h4>
               <p className="text-xs text-emerald-800 mt-0.5 leading-relaxed">
-                Nomor Tiket: <span className="font-mono font-bold text-emerald-900">{submittedReport.id}</span> — {submittedReport.title}
+                Nomor Tiket: <span className="font-mono font-bold text-emerald-900">{formatReportTicketNumber(submittedReport)}</span> — {submittedReport.title}
               </p>
               <p className="text-[11px] text-emerald-700 mt-1">
-                Laporan telah tercatat di antrean Helpdesk & tim penanggung jawab akan segera memverifikasi.
+                Laporan telah tersimpan di database Supabase &amp; pemberitahuan resmi telah diteruskan ke Kepala Sekolah.
               </p>
             </div>
           </div>
@@ -712,7 +759,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[11px] font-mono text-slate-500">{draft.id}</span>
+                        <span className="text-[11px] font-mono text-slate-500">{formatReportTicketNumber(draft)}</span>
                         <span className="text-[11px] text-slate-400">·</span>
                         <span className="text-[11px] text-slate-500">{formatDateOnly(draft.incidentDate)}</span>
                       </div>

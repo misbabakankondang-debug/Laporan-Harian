@@ -1,5 +1,5 @@
 import { ReportItem, AppSettings, UserProfile } from '../types/report';
-import { categoryLabels, priorityLabels, formatDateOnly, formatDateTime, formatFileSize } from './formatters';
+import { categoryLabels, priorityLabels, formatDateOnly, formatDateTime, formatFileSize, formatReportTicketNumber } from './formatters';
 
 export function openPrintPdfTab(
   report: ReportItem,
@@ -109,12 +109,13 @@ export function openPrintPdfTab(
       ? `<div class="sign-space" style="height: 60px; display: flex; align-items: center; justify-content: center; font-style: italic; font-weight: bold; font-size: 13pt; color: #000000; letter-spacing: 1px;">( Ttd )</div>`
       : `<div class="sign-space" style="height: 60px;"></div>`);
 
+  const displayTicketNumber = formatReportTicketNumber(report);
   const html = `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Laporan_SIBAHAR_${report.id.replace(/\//g, '_')}</title>
+  <title>Laporan_SIBAHAR_${displayTicketNumber.replace(/\//g, '_')}</title>
   <style>
     @page {
       size: legal portrait;
@@ -370,7 +371,7 @@ export function openPrintPdfTab(
     <!-- JUDUL LAPORAN & NOMOR -->
     <div class="doc-title">
       <h1>Laporan Berita Aktual Harian</h1>
-      <div class="doc-num">Nomor: <strong>${report.id}</strong></div>
+      <div class="doc-num">Nomor: <strong>${displayTicketNumber}</strong></div>
     </div>
 
     <!-- TABEL DATA LAPORAN -->

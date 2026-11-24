@@ -19,7 +19,8 @@ import {
   statusLabels, 
   formatDateTime, 
   formatDateOnly,
-  formatFileSize 
+  formatFileSize,
+  formatReportTicketNumber 
 } from '../utils/formatters';
 import { KemensosLogo } from './KemensosLogo';
 import { openPrintPdfTab } from '../utils/printPdf';
@@ -122,7 +123,7 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
         <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50/80 shrink-0 no-print">
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono font-bold text-indigo-700 px-2 py-0.5 bg-indigo-50 border border-indigo-200 rounded">
-              {report.id}
+              {formatReportTicketNumber(report)}
             </span>
             <div className="flex items-center gap-2">
               <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${prio.badge}`}>
@@ -219,7 +220,7 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
               Laporan Berita Aktual Harian
             </h2>
             <p className="text-xs font-mono text-slate-600 mt-0.5">
-              Nomor: <strong>{report.id}</strong>
+              Nomor: <strong>{formatReportTicketNumber(report)}</strong>
             </p>
           </div>
           

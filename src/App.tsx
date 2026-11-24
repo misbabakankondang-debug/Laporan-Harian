@@ -19,16 +19,25 @@ import {
 } from './types/report';
 import { 
   initialReports, 
-  initialSettings, 
-  initialNotifications 
+  initialSettings
 } from './data/initialData';
 import { KemensosLogo } from './components/KemensosLogo';
 import { 
   getSupabaseClient, 
   mapDbReportToReportItem, 
   mapReportItemToDbRow,
-  logAuditEvent 
+  logAuditEvent,
+  generateUniqueReportId,
+  mapDbNotificationToNotificationItem,
+  isNotificationVisibleToUser,
+  fetchNotificationsFromSupabase,
+  markNotificationsReadInSupabase,
+  submitReportToSupabase,
+  resolveReportForNotification,
+  normalizeReportUserRole,
+  SubmitReportResult
 } from './lib/supabase';
+import { formatReportTicketNumber } from './utils/formatters';
 
 function SIBAHARAppContent() {
   const { 
@@ -66,19 +75,14 @@ function SIBAHARAppContent() {
     }
   });
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
-    try {
-      const saved = localStorage.getItem('sibahar_notifs') || localStorage.getItem('reporthub_notifs');
-      return saved ? JSON.parse(saved) : initialNotifications;
-    } catch {
-      return initialNotifications;
-    }
-  });
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
   // UI Navigation states
   const [currentTab, setCurrentTab] = useState<TabType>('dashboard');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('all');
   const [selectedReportForDetail, setSelectedReportForDetail] = useState<ReportItem | null>(null);
+  const [notificationOpenError, setNotificationOpenError] = useState<string | null>(null);
+  const [isLoadingNotifReport, setIsLoadingNotifReport] = useState(false);
   const [isOpenMobileSidebar, setIsOpenMobileSidebar] = useState(false);
 
   // Sync with localStorage only while authenticated
@@ -98,22 +102,22 @@ function SIBAHARAppContent() {
     localStorage.setItem('sibahar_settings', JSON.stringify(appSettings));
   }, [appSettings]);
 
-  useEffect(() => {
-    if (!isLoggedIn) return;
-    localStorage.setItem('sibahar_notifs', JSON.stringify(notifications));
-  }, [notifications, isLoggedIn]);
-
   // Bersihkan state sensitif & arahkan kembali ke halaman login saat belum terotentikasi / logout
   useEffect(() => {
     if (isAuthLoading) return;
     if (!isLoggedIn) {
       setReports([]);
+      setNotifications([]);
       setSelectedReportForDetail(null);
+      setNotificationOpenError(null);
+      setIsLoadingNotifReport(false);
       setCurrentTab('dashboard');
       setHistoryStatusFilter('all');
       setIsOpenMobileSidebar(false);
       try {
         localStorage.removeItem('sibahar_items');
+        localStorage.removeItem('sibahar_notifs');
+        localStorage.removeItem('reporthub_notifs');
         localStorage.removeItem('sibahar_active_user');
         if (window.location.pathname !== '/' || window.location.search.includes('portal=')) {
           window.history.replaceState({}, '', '/');
@@ -122,13 +126,18 @@ function SIBAHARAppContent() {
     }
   }, [isAuthLoading, isLoggedIn]);
 
-  // Sync with Supabase Database and listen to Realtime changes (HANYA setelah autentikasi Supabase terverifikasi)
+  // Sync reports & notifications with Supabase Database (HANYA setelah autentikasi Supabase terverifikasi)
   useEffect(() => {
-    if (isAuthLoading || !isLoggedIn) return;
+    if (isAuthLoading || !isLoggedIn || !currentUser.id) return;
     const client = getSupabaseClient();
-    if (!client || !isSupabaseConnected) return;
+    if (!client) return;
 
     let isMounted = true;
+    try {
+      localStorage.removeItem('sibahar_notifs');
+      localStorage.removeItem('reporthub_notifs');
+    } catch {}
+
     const fetchSupabaseReports = async () => {
       try {
         const { data, error } = await client
@@ -136,20 +145,36 @@ function SIBAHARAppContent() {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (!error && data && isMounted) {
+        if (error) {
+          console.warn('Gagal memuat daftar laporan dari Supabase:', error.message);
+          return;
+        }
+        if (data && isMounted) {
           const mapped = data.map(mapDbReportToReportItem);
           setReports(mapped);
         }
       } catch (err) {
-        console.warn('Gagal memuat data dari Supabase:', err);
+        console.warn('Gagal memuat data laporan dari Supabase:', err);
       }
     };
 
-    fetchSupabaseReports();
+    const fetchInitialNotifications = async () => {
+      const res = await fetchNotificationsFromSupabase(client, currentUser.id, currentRole);
+      if (res.error) {
+        console.warn('Gagal memuat notifikasi dari Supabase:', res.error);
+        return;
+      }
+      if (isMounted) {
+        setNotifications(res.notifications);
+      }
+    };
+
+    void fetchSupabaseReports();
+    void fetchInitialNotifications();
 
     // Supabase Realtime Channel
     const channel = client
-      .channel('sibahar_realtime_channel')
+      .channel(`sibahar_realtime_${currentUser.id}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'reports' },
@@ -176,16 +201,26 @@ function SIBAHARAppContent() {
         { event: 'INSERT', schema: 'public', table: 'notifications' },
         (payload: any) => {
           if (payload.new) {
-            const newNotif: NotificationItem = {
-              id: payload.new.id || 'notif-' + Date.now(),
-              title: payload.new.title,
-              message: payload.new.message,
-              time: 'Baru saja',
-              read: payload.new.read || false,
-              type: payload.new.type || 'system',
-              reportId: payload.new.report_id,
-            };
-            setNotifications((prev) => [newNotif, ...prev]);
+            const mappedNotif = mapDbNotificationToNotificationItem(payload.new);
+            if (!isNotificationVisibleToUser(mappedNotif, currentUser.id, currentRole)) {
+              return;
+            }
+            setNotifications((prev) => {
+              if (prev.some((n) => n.id === mappedNotif.id)) return prev;
+              return [mappedNotif, ...prev];
+            });
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'notifications' },
+        (payload: any) => {
+          if (payload.new) {
+            const mappedNotif = mapDbNotificationToNotificationItem(payload.new);
+            setNotifications((prev) =>
+              prev.map((n) => (n.id === mappedNotif.id ? mappedNotif : n))
+            );
           }
         }
       )
@@ -199,7 +234,7 @@ function SIBAHARAppContent() {
       isMounted = false;
       client.removeChannel(channel);
     };
-  }, [isAuthLoading, isLoggedIn, isSupabaseConnected]);
+  }, [isAuthLoading, isLoggedIn, isSupabaseConnected, currentUser.id, currentRole]);
 
   // Keep selectedReportForDetail in sync with updated report items
   useEffect(() => {
@@ -211,112 +246,74 @@ function SIBAHARAppContent() {
     }
   }, [reports]);
 
-  // Handlers for creating reports
-  const handleSubmitReport = (newReportData: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>): ReportItem => {
-    // Generate sequential ticket ID with format: DDMMYYYY / Nomor Urut (e.g. 12112026/001)
-    const now = new Date();
-    const d = String(now.getDate()).padStart(2, '0');
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const y = now.getFullYear();
-    const dateStr = `${d}${m}${y}`;
-
-    const nonDrafts = reports.filter((r) => r.id.startsWith(dateStr) && !r.id.includes('DRAFT'));
-    const nextNum = nonDrafts.length + 1;
-    const ticketId = `${dateStr}/${String(nextNum).padStart(3, '0')}`;
-
-    const timeFormatted = now.toLocaleDateString('id-ID', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }) + ' ' + now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-
-    const newReport: ReportItem = {
-      ...newReportData,
-      id: ticketId,
-      userId: currentUser.id,
-      userRole: currentUser.roleKey,
-      createdAt: now.toISOString(),
-      logs: [
-        {
-          id: 'log-' + Math.random().toString(36).substring(2, 9),
-          timestamp: timeFormatted,
-          actor: currentUser.name,
-          action: 'Laporan Dibuat',
-          note: `Laporan berhasil diajukan oleh ${currentUser.name} (${USER_ROLES[currentUser.roleKey]?.label || currentUser.role}) ke antrean sistem SIBAHAR.`,
-        },
-      ],
-    };
-
-    // Update local state
-    setReports((prev) => [newReport, ...prev]);
-
-    // Insert to Supabase if connected
+  // Handlers for creating reports (wajib berhasil INSERT ke Supabase sebelum state/notifikasi/banner sukses)
+  const handleSubmitReport = async (
+    newReportData: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>
+  ): Promise<SubmitReportResult> => {
     const client = getSupabaseClient();
-    if (client) {
-      client
-        .from('reports')
-        .insert(mapReportItemToDbRow(newReport, currentUser.id || 'usr-default', currentUser.roleKey || 'guru'))
-        .then(
-          ({ error }) => {
-            if (error) {
-              console.warn('Gagal sync insert ke Supabase:', error.message);
-            }
-          },
-          (err: any) => {
-            console.warn('Supabase insert network warning (Failed to fetch):', err?.message || err);
-          }
-        );
+    const result = await submitReportToSupabase(client, newReportData, currentUser);
+
+    if (!result.success || !result.report) {
+      return {
+        success: false,
+        error: result.error || 'Gagal menyimpan laporan ke database Supabase.',
+      };
     }
 
-    // Add user notification & automated notification for Kepala Sekolah
-    const senderRoleLabel = USER_ROLES[currentUser.roleKey]?.label || currentUser.role;
-    const newNotif: NotificationItem = {
-      id: 'notif-' + Date.now(),
-      title: `Laporan Terkirim [${senderRoleLabel}]`,
-      message: `Tiket #${ticketId} ("${newReport.title.slice(0, 35)}...") berhasil diajukan oleh ${currentUser.name} ke sistem SIBAHAR.`,
-      time: 'Baru saja',
-      read: false,
-      type: 'system',
-      reportId: ticketId,
-    };
+    const savedReport = result.report;
 
-    // Otomatis kirim notifikasi masuk ke Akun Kepala Sekolah
-    const kepsekNotif: NotificationItem = {
-      id: 'notif-kepsek-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-      title: `Laporan Masuk: [${senderRoleLabel}]`,
-      message: `Laporan baru masuk dari ${currentUser.name} (${senderRoleLabel} — NIP: ${currentUser.nip || '-'}): "${newReport.title}". Laporan otomatis masuk ke antrean pengawasan Anda.`,
-      time: 'Baru saja',
-      read: false,
-      type: 'new_report',
-      reportId: ticketId,
-      recipientRole: 'kepala_sekolah',
-    };
+    // Perbarui state reports hanya setelah INSERT Supabase berhasil (tanpa duplikasi)
+    setReports((prev) =>
+      prev.some((r) => r.id === savedReport.id)
+        ? prev.map((r) => (r.id === savedReport.id ? savedReport : r))
+        : [savedReport, ...prev]
+    );
 
-    setNotifications((prev) => [newNotif, kepsekNotif, ...prev]);
+    // Notifikasi resmi Kepala Sekolah dihasilkan oleh trigger DB on_report_inserted pada public.notifications.
+    // Untuk akun non-Kepala Sekolah pengirim, tampilkan konfirmasi in-memory hanya setelah INSERT sukses.
+    const normalizedRole = normalizeReportUserRole(currentUser.roleKey);
+    if (normalizedRole !== 'kepala_sekolah') {
+      const senderRoleLabel = USER_ROLES[normalizedRole]?.label || currentUser.role;
+      const ticketDisplay = formatReportTicketNumber(savedReport);
+      const senderNotif: NotificationItem = {
+        id: `local-sent-${savedReport.id}`,
+        title: `Laporan Terkirim [${senderRoleLabel}]`,
+        message: `Tiket #${ticketDisplay} ("${savedReport.title.slice(0, 35)}...") berhasil tersimpan di Supabase.`,
+        time: 'Baru saja',
+        read: false,
+        type: 'system',
+        reportId: savedReport.id,
+        recipientId: currentUser.id,
+      };
+      setNotifications((prev) =>
+        prev.some((n) => n.id === senderNotif.id) ? prev : [senderNotif, ...prev]
+      );
+    }
 
-    // Record audit event
+    // Record audit event hanya setelah laporan benar-benar tersimpan
     logAuditEvent({
       userId: currentUser.id,
       userEmail: currentUser.email,
-      userRole: currentUser.roleKey,
+      userRole: normalizedRole,
       action: 'CREATE_REPORT',
       resourceType: 'reports',
-      resourceId: ticketId,
-      details: { title: newReport.title, category: newReport.category, priority: newReport.priority }
+      resourceId: savedReport.id,
+      details: {
+        title: savedReport.title,
+        category: savedReport.category,
+        priority: savedReport.priority,
+      },
     });
 
-    return newReport;
+    return {
+      success: true,
+      report: savedReport,
+    };
   };
 
   const handleSaveDraft = (draftData: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>): ReportItem => {
     const now = new Date();
-    const d = String(now.getDate()).padStart(2, '0');
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const y = now.getFullYear();
-    const dateStr = `${d}${m}${y}`;
-
-    const draftCount = reports.filter((r) => r.id.startsWith(dateStr) && r.status === 'draft').length + 1;
-    const draftId = `${dateStr}/DRAFT-${String(draftCount).padStart(3, '0')}`;
+    const draftId = generateUniqueReportId('draft');
 
     const timeFormatted = now.toLocaleDateString('id-ID', {
       year: 'numeric',
@@ -333,7 +330,7 @@ function SIBAHARAppContent() {
       createdAt: now.toISOString(),
       logs: [
         {
-          id: 'log-' + Math.random().toString(36).substring(2, 9),
+          id: `log-${generateUniqueReportId().slice(0, 8)}`,
           timestamp: timeFormatted,
           actor: currentUser.name,
           action: 'Draft Disimpan',
@@ -723,7 +720,7 @@ function SIBAHARAppContent() {
     if (window.confirm('Apakah Anda yakin ingin mereset pengaturan tampilan lokal kembali ke setelan awal SIBAHAR?')) {
       setReports(initialReports);
       setAppSettings(initialSettings);
-      setNotifications(initialNotifications);
+      setNotifications([]);
       localStorage.removeItem('sibahar_items');
       localStorage.removeItem('sibahar_profile');
       localStorage.removeItem('sibahar_settings');
@@ -733,6 +730,61 @@ function SIBAHARAppContent() {
       localStorage.removeItem('reporthub_settings');
       localStorage.removeItem('reporthub_notifs');
       alert('Pengaturan tampilan lokal SIBAHAR telah direset ke setelan awal.');
+    }
+  };
+
+  const handleMarkNotificationRead = (id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+    );
+    const client = getSupabaseClient();
+    if (client) {
+      void markNotificationsReadInSupabase(client, [id]).then((res) => {
+        if (!res.success && res.error) {
+          console.warn('Gagal menyinkronkan status dibaca notifikasi ke Supabase:', res.error);
+        }
+      });
+    }
+  };
+
+  const handleMarkAllNotificationsRead = () => {
+    const unreadIds = notifications.filter((n) => !n.read).map((n) => n.id);
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    const client = getSupabaseClient();
+    if (client && unreadIds.length > 0) {
+      void markNotificationsReadInSupabase(client, unreadIds).then((res) => {
+        if (!res.success && res.error) {
+          console.warn('Gagal menyinkronkan status seluruh notifikasi dibaca:', res.error);
+        }
+      });
+    }
+  };
+
+  const handleSelectReportFromNotif = async (reportId: string) => {
+    setNotificationOpenError(null);
+    setIsLoadingNotifReport(true);
+    try {
+      const client = getSupabaseClient();
+      const result = await resolveReportForNotification(client, reports, reportId);
+      if (!result.success || !result.report) {
+        setNotificationOpenError(
+          result.error || `Laporan dengan ID ${reportId} tidak dapat ditemukan.`
+        );
+        return;
+      }
+
+      const resolved = result.report;
+      if (result.fromDatabase) {
+        setReports((prev) =>
+          prev.some((r) => r.id === resolved.id)
+            ? prev.map((r) => (r.id === resolved.id ? resolved : r))
+            : [resolved, ...prev]
+        );
+      }
+
+      setSelectedReportForDetail(resolved);
+    } finally {
+      setIsLoadingNotifReport(false);
     }
   };
 
@@ -821,24 +873,37 @@ function SIBAHARAppContent() {
           onSwitchTab={setCurrentTab}
           notifications={notifications}
           mainLogoUrl={appSettings.mainLogoUrl}
-          onMarkNotificationRead={(id) => {
-            setNotifications((prev) =>
-              prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-            );
-          }}
-          onMarkAllNotificationsRead={() => {
-            setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-          }}
-          onSelectReportFromNotif={(reportId) => {
-            const match = reports.find((r) => r.id === reportId);
-            if (match) {
-              setSelectedReportForDetail(match);
-            }
-          }}
+          onMarkNotificationRead={handleMarkNotificationRead}
+          onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+          onSelectReportFromNotif={handleSelectReportFromNotif}
         />
 
         {/* Konten Halaman */}
         <main className="p-4 sm:p-6 md:p-8 max-w-6xl w-full mx-auto">
+          {isLoadingNotifReport && (
+            <div className="mb-4 px-4 py-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-medium flex items-center gap-2.5">
+              <div className="w-4 h-4 border-2 border-indigo-300 border-t-indigo-700 rounded-full animate-spin shrink-0" />
+              <span>Memuat detail laporan dari database Supabase...</span>
+            </div>
+          )}
+          {notificationOpenError && (
+            <div
+              role="alert"
+              className="mb-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-start justify-between gap-3"
+            >
+              <div>
+                <p className="font-bold">Laporan Tidak Dapat Dibuka dari Notifikasi</p>
+                <p className="text-rose-800 mt-0.5">{notificationOpenError}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNotificationOpenError(null)}
+                className="text-rose-600 hover:text-rose-900 font-semibold shrink-0 px-2 py-0.5 rounded hover:bg-rose-100 transition"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
           {currentTab === 'dashboard' && (
             <MainDashboardView
               reports={reports}

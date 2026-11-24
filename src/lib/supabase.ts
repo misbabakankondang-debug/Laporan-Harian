@@ -1,5 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { ReportItem, UserRole } from '../types/report';
+import {
+  NotificationItem,
+  ReportItem,
+  USER_ROLES,
+  UserProfile,
+  UserRole,
+} from '../types/report';
+import { formatDateTime } from '../utils/formatters';
 
 export const EXPECTED_SUPABASE_PROJECT_REF = 'ghpxnwlqpgbglpjgxeus';
 export const EXPECTED_SUPABASE_URL = `https://${EXPECTED_SUPABASE_PROJECT_REF}.supabase.co`;
@@ -1630,5 +1637,335 @@ export async function logAuditEvent(params: {
     });
   } catch (err) {
     console.warn('Gagal mencatat audit log ke Supabase:', err);
+  }
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const normalizeReportUserRole = (role?: string | null): UserRole => {
+  const raw = String(role || 'guru').trim().toLowerCase();
+  if (raw === 'keamanan') return 'tenaga_keamanan';
+  if (
+    raw === 'admin' ||
+    raw === 'wali_asrama' ||
+    raw === 'wali_asuh' ||
+    raw === 'guru' ||
+    raw === 'tenaga_keamanan' ||
+    raw === 'kepala_sekolah'
+  ) {
+    return raw;
+  }
+  return 'guru';
+};
+
+// Pembentuk ID primer laporan yang unik secara global (UUID v4) agar tidak pernah bentrok antar pengguna
+export const generateUniqueReportId = (prefix?: 'draft'): string => {
+  let uuid = '';
+  try {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+      uuid = globalThis.crypto.randomUUID();
+    } else if (typeof globalThis.crypto?.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      globalThis.crypto.getRandomValues(bytes);
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+  } catch {}
+
+  if (!uuid) {
+    const rand = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
+    uuid = `${rand()}${rand()}-${rand()}-4${rand().slice(1)}-8${rand().slice(1)}-${rand()}${rand()}${rand()}`;
+  }
+
+  return prefix === 'draft' ? `draft-${uuid}` : uuid;
+};
+
+export const mapDbNotificationToNotificationItem = (row: any): NotificationItem => {
+  const recipientRole = row?.recipient_role
+    ? normalizeReportUserRole(row.recipient_role)
+    : undefined;
+  return {
+    id: String(row?.id || ''),
+    title: row?.title || 'Pemberitahuan SIBAHAR',
+    message: row?.message || '',
+    time: row?.created_at ? formatDateTime(String(row.created_at)) : 'Baru saja',
+    read: Boolean(row?.is_read ?? row?.read ?? false),
+    type: row?.report_id ? 'new_report' : row?.type || 'system',
+    reportId: row?.report_id ? String(row.report_id) : undefined,
+    recipientId: row?.recipient_id ? String(row.recipient_id) : undefined,
+    recipientRole,
+  };
+};
+
+export const isNotificationVisibleToUser = (
+  notif: NotificationItem,
+  currentUserId?: string,
+  currentRole?: UserRole
+): boolean => {
+  if (notif.recipientId) {
+    return Boolean(currentUserId && notif.recipientId === currentUserId);
+  }
+  if (notif.recipientRole) {
+    return Boolean(
+      currentRole &&
+        normalizeReportUserRole(notif.recipientRole) === normalizeReportUserRole(currentRole)
+    );
+  }
+  return true;
+};
+
+export async function fetchNotificationsFromSupabase(
+  client: any,
+  currentUserId?: string,
+  currentRole?: UserRole
+): Promise<{ notifications: NotificationItem[]; error?: string }> {
+  if (!client) {
+    return { notifications: [], error: 'Klien Supabase tidak tersedia.' };
+  }
+
+  try {
+    const { data, error } = await client
+      .from('notifications')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      return { notifications: [], error: error.message || 'Gagal memuat notifikasi.' };
+    }
+
+    const mapped = (Array.isArray(data) ? data : [])
+      .map(mapDbNotificationToNotificationItem)
+      .filter((n) => n.id && isNotificationVisibleToUser(n, currentUserId, currentRole));
+
+    return { notifications: mapped };
+  } catch (err: any) {
+    return {
+      notifications: [],
+      error: err?.message || 'Gagal memuat notifikasi dari Supabase.',
+    };
+  }
+}
+
+export async function markNotificationsReadInSupabase(
+  client: any,
+  notificationIds: string[]
+): Promise<{ success: boolean; error?: string }> {
+  if (!client) {
+    return { success: false, error: 'Klien Supabase tidak tersedia.' };
+  }
+
+  const validDbIds = notificationIds.filter((id) => UUID_PATTERN.test(String(id)));
+  if (validDbIds.length === 0) {
+    return { success: true };
+  }
+
+  try {
+    const { error } = await client
+      .from('notifications')
+      .update({ is_read: true })
+      .in('id', validDbIds);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Gagal memperbarui status notifikasi.' };
+  }
+}
+
+export interface SubmitReportResult {
+  success: boolean;
+  report?: ReportItem;
+  error?: string;
+}
+
+const formatSupabaseReportError = (
+  err: { message?: string; code?: string; details?: string; hint?: string } | null | undefined,
+  fallbackAction: string
+): string => {
+  if (!err) return `Gagal ${fallbackAction}.`;
+  const code = String(err.code || '').toUpperCase();
+  const msg = String(err.message || '');
+  const lower = msg.toLowerCase();
+
+  if (
+    code === '42501' ||
+    lower.includes('row-level security') ||
+    lower.includes('permission denied')
+  ) {
+    return `Akses ditolak oleh kebijakan keamanan database (RLS/izin peran) saat ${fallbackAction}. Pastikan akun Anda aktif dan login dengan sesi yang valid.`;
+  }
+  if (code === '23505' || lower.includes('duplicate key')) {
+    return `Terjadi bentrokan ID laporan di database (duplicate key). Silakan kirim ulang laporan.`;
+  }
+  if (lower.includes('failed to fetch') || lower.includes('network')) {
+    return `Koneksi ke server Supabase terputus saat ${fallbackAction}. Periksa jaringan internet Anda dan coba lagi.`;
+  }
+  return msg || `Gagal ${fallbackAction} ke database Supabase.`;
+};
+
+export async function submitReportToSupabase(
+  client: any,
+  newReportData: Omit<ReportItem, 'id' | 'createdAt' | 'logs'>,
+  currentUser: UserProfile
+): Promise<SubmitReportResult> {
+  if (!client) {
+    return {
+      success: false,
+      error: 'Koneksi Supabase belum tersedia. Laporan tidak dapat dikirim sebelum terhubung ke database.',
+    };
+  }
+
+  if (!currentUser?.id || !UUID_PATTERN.test(currentUser.id)) {
+    return {
+      success: false,
+      error: 'Sesi pengguna Supabase tidak valid. Silakan login ulang sebelum mengirim laporan.',
+    };
+  }
+
+  try {
+    if (typeof client.auth?.getSession === 'function') {
+      const { data: sessionData, error: sessionErr } = await client.auth.getSession();
+      if (sessionErr || !sessionData?.session?.access_token) {
+        return {
+          success: false,
+          error: 'Sesi autentikasi Supabase telah berakhir. Silakan login ulang.',
+        };
+      }
+    }
+  } catch {
+    return {
+      success: false,
+      error: 'Gagal memverifikasi sesi autentikasi Supabase sebelum menyimpan laporan.',
+    };
+  }
+
+  const now = new Date();
+  const reportId = generateUniqueReportId();
+  const normalizedRole = normalizeReportUserRole(currentUser.roleKey);
+  const timeFormatted =
+    now.toLocaleDateString('id-ID', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }) +
+    ' ' +
+    now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+  const newReport: ReportItem = {
+    ...newReportData,
+    id: reportId,
+    userId: currentUser.id,
+    userRole: normalizedRole,
+    createdAt: now.toISOString(),
+    logs: [
+      {
+        id: `log-${generateUniqueReportId().slice(0, 8)}`,
+        timestamp: timeFormatted,
+        actor: currentUser.name,
+        action: 'Laporan Dibuat',
+        note: `Laporan berhasil diajukan oleh ${currentUser.name} (${USER_ROLES[normalizedRole]?.label || currentUser.role}) ke antrean sistem SIBAHAR.`,
+      },
+    ],
+  };
+
+  try {
+    const dbPayload = mapReportItemToDbRow(newReport, currentUser.id, normalizedRole);
+    const { data, error } = await client
+      .from('reports')
+      .insert(dbPayload)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        error: formatSupabaseReportError(error, 'menyimpan laporan'),
+      };
+    }
+
+    return {
+      success: true,
+      report: mapDbReportToReportItem(data),
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: formatSupabaseReportError(err, 'menyimpan laporan'),
+    };
+  }
+}
+
+export interface FetchNotificationReportResult {
+  success: boolean;
+  report?: ReportItem;
+  fromDatabase?: boolean;
+  error?: string;
+}
+
+export async function resolveReportForNotification(
+  client: any,
+  localReports: ReportItem[],
+  reportId: string
+): Promise<FetchNotificationReportResult> {
+  const cleanedId = String(reportId || '').trim();
+  if (!cleanedId) {
+    return {
+      success: false,
+      error: 'Notifikasi ini tidak memiliki ID laporan yang valid.',
+    };
+  }
+
+  const localMatch = localReports.find((r) => r.id === cleanedId);
+  if (localMatch) {
+    return {
+      success: true,
+      report: localMatch,
+      fromDatabase: false,
+    };
+  }
+
+  if (!client) {
+    return {
+      success: false,
+      error: 'Koneksi Supabase tidak tersedia untuk mengambil detail laporan.',
+    };
+  }
+
+  try {
+    const { data, error } = await client
+      .from('reports')
+      .select('*')
+      .eq('id', cleanedId)
+      .maybeSingle();
+
+    if (error) {
+      return {
+        success: false,
+        error: formatSupabaseReportError(error, `membuka laporan (${cleanedId})`),
+      };
+    }
+
+    if (!data) {
+      return {
+        success: false,
+        error: `Laporan dengan ID ${cleanedId} tidak ditemukan di database atau Anda tidak memiliki hak akses untuk melihatnya.`,
+      };
+    }
+
+    return {
+      success: true,
+      report: mapDbReportToReportItem(data),
+      fromDatabase: true,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: formatSupabaseReportError(err, `membuka laporan (${cleanedId})`),
+    };
   }
 }

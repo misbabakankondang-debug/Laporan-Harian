@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Menu, Bell, Plus, Check, Clock, ChevronRight } from 'lucide-react';
 import { TabType } from './Sidebar';
 import { NotificationItem } from '../types/report';
+import { formatReportTicketNumber } from '../utils/formatters';
 
 interface HeaderProps {
   currentTab: TabType;
@@ -182,7 +183,7 @@ export const Header: React.FC<HeaderProps> = ({
                         </p>
                         {notif.reportId && (
                           <span className="inline-flex items-center gap-0.5 text-[11px] text-indigo-600 hover:underline font-mono mt-1">
-                            Buka tiket {notif.reportId} <ChevronRight className="w-3 h-3" />
+                            Buka tiket {formatReportTicketNumber(notif.reportId)} <ChevronRight className="w-3 h-3" />
                           </span>
                         )}
                       </div>

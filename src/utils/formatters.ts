@@ -30,6 +30,40 @@ export function formatDateOnly(dateStr: string): string {
   }
 }
 
+export function formatReportTicketNumber(
+  reportOrId: string | { id: string; createdAt?: string; incidentDate?: string }
+): string {
+  const id = typeof reportOrId === 'string' ? reportOrId : reportOrId?.id || '';
+  if (!id) return '-';
+
+  // Pertahankan nomor tiket format lama (mis. 12112026/001 atau 12112026/DRAFT-001)
+  if (/^\d{8}\//.test(id) || id.includes('DRAFT-')) {
+    return id;
+  }
+
+  // Untuk ID unik global berbasis UUID (atau prefix draft-), bentuk nomor tiket tampilan DDMMYYYY/XXXXXXXX
+  const cleanHex = id.replace(/^draft-/i, '').replace(/-/g, '').slice(0, 8).toUpperCase();
+  const dateSource =
+    typeof reportOrId === 'object' ? reportOrId.createdAt || reportOrId.incidentDate : undefined;
+
+  let datePrefix = '';
+  if (dateSource) {
+    const parsed = new Date(dateSource);
+    if (!isNaN(parsed.getTime())) {
+      const d = String(parsed.getDate()).padStart(2, '0');
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const y = parsed.getFullYear();
+      datePrefix = `${d}${m}${y}`;
+    }
+  }
+
+  if (id.toLowerCase().startsWith('draft-')) {
+    return datePrefix ? `${datePrefix}/DRAFT-${cleanHex}` : `DRAFT-${cleanHex}`;
+  }
+
+  return datePrefix ? `${datePrefix}/${cleanHex}` : cleanHex;
+}
+
 export function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 B';
   const k = 1024;
