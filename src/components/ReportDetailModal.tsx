@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   X,
   Printer,
@@ -12,6 +12,10 @@ import {
   FileText,
   AlertTriangle,
   AlertCircle,
+  Camera,
+  ZoomIn,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import { ReportItem, ReportStatus, AppSettings, UserProfile } from '../types/report';
 import {
@@ -21,6 +25,7 @@ import {
   formatDateOnly,
   formatFileSize,
   formatReportTicketNumber,
+  formatDormitoryTypesLabel,
   getCategoryDisplayLabel,
   getReportJenjangBadgeList,
   reportHasYesFindings,
@@ -28,9 +33,24 @@ import {
   normalizeChecklistAnswers,
   isKepalaSekolahReporter,
   getReporterRoleDisplayLabel,
+  isImageAttachmentFile,
+  MAX_CHECKLIST_EVIDENCE_PHOTOS,
 } from '../utils/formatters';
-import { openPrintPdfTab, sanitizeImageUrl } from '../utils/printPdf';
-import { SubmitReportResult } from '../lib/supabase';
+import {
+  openPrintPdfTab,
+  openPendingPrintTab,
+  populatePrintPdfTab,
+  sanitizeImageUrl,
+} from '../utils/printPdf';
+import {
+  SubmitReportResult,
+  ResolveReportStorageUrlsResult,
+  collectReportRequiredPhotoStoragePaths,
+  resolveReportStorageUrlsDetailed,
+} from '../lib/supabase';
+
+const SIGNED_URL_TTL_SECONDS = 900; // 15 menit
+const SIGNED_URL_REFRESH_AFTER_MS = (SIGNED_URL_TTL_SECONDS - 120) * 1000; // Refresh proaktif pada 13 menit
 
 interface ReportDetailModalProps {
   report: ReportItem;
@@ -58,6 +78,221 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [resolvedStorageUrls, setResolvedStorageUrls] = useState<Record<string, string>>({});
+  const [isResolvingStorageUrls, setIsResolvingStorageUrls] = useState(false);
+  const [storageUrlError, setStorageUrlError] = useState<string | null>(null);
+  const [isPreparingPrint, setIsPreparingPrint] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const [popupBlockedError, setPopupBlockedError] = useState<string | null>(null);
+  const [enlargedPhoto, setEnlargedPhoto] = useState<{
+    url: string;
+    title: string;
+    subtitle?: string;
+    storagePath?: string;
+  } | null>(null);
+
+  const mountedRef = useRef(true);
+  const reportIdRef = useRef(report.id);
+  reportIdRef.current = report.id;
+  const resolvedStorageUrlsRef = useRef<Record<string, string>>({});
+  const resolvedAtRef = useRef<number>(0);
+  const inFlightResolveRef = useRef<{
+    reportId: string;
+    startedAt: number;
+    promise: Promise<ResolveReportStorageUrlsResult>;
+  } | null>(null);
+  const retriedErrorPathsRef = useRef<Set<string>>(new Set());
+  const pendingPrintWindowRef = useRef<Window | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (pendingPrintWindowRef.current && !pendingPrintWindowRef.current.closed) {
+        try {
+          pendingPrintWindowRef.current.close();
+        } catch {}
+      }
+      pendingPrintWindowRef.current = null;
+    };
+  }, []);
+
+  const requiredPhotoPaths = useMemo(
+    () => collectReportRequiredPhotoStoragePaths(report),
+    [report]
+  );
+
+  const hasAnyStoragePath = useMemo(() => {
+    if (
+      Array.isArray(report.attachments) &&
+      report.attachments.some((att) => Boolean(String(att?.storagePath || '').trim()))
+    ) {
+      return true;
+    }
+    if (Array.isArray(report.entries)) {
+      return report.entries.some(
+        (entry) =>
+          Array.isArray(entry.checklistAnswers) &&
+          entry.checklistAnswers.some(
+            (ans) =>
+              Array.isArray(ans.attachments) &&
+              ans.attachments.some((att) => Boolean(String(att?.storagePath || '').trim()))
+          )
+      );
+    }
+    return false;
+  }, [report]);
+
+  const refreshStorageUrls = useCallback(
+    async (forceRefresh = false): Promise<ResolveReportStorageUrlsResult> => {
+      if (!hasAnyStoragePath) {
+        return {
+          urls: {},
+          requiredPhotoPaths: [],
+          failedPhotoPaths: [],
+          allRequiredPhotosResolved: true,
+          resolvedAt: Date.now(),
+        };
+      }
+
+      const activeInFlight = inFlightResolveRef.current;
+      if (
+        activeInFlight &&
+        activeInFlight.reportId === report.id &&
+        (!forceRefresh || Date.now() - activeInFlight.startedAt < 5000)
+      ) {
+        return activeInFlight.promise;
+      }
+
+      const isCacheFresh =
+        resolvedAtRef.current > 0 &&
+        Date.now() - resolvedAtRef.current < SIGNED_URL_REFRESH_AFTER_MS;
+      const allRequiredCached = requiredPhotoPaths.every((p) =>
+        Boolean(resolvedStorageUrlsRef.current[p])
+      );
+
+      if (!forceRefresh && isCacheFresh && allRequiredCached) {
+        return {
+          urls: resolvedStorageUrlsRef.current,
+          requiredPhotoPaths,
+          failedPhotoPaths: [],
+          allRequiredPhotosResolved: true,
+          resolvedAt: resolvedAtRef.current,
+        };
+      }
+
+      const targetReportId = report.id;
+      if (mountedRef.current) {
+        setIsResolvingStorageUrls(true);
+      }
+
+      const promise = resolveReportStorageUrlsDetailed(report, SIGNED_URL_TTL_SECONDS)
+        .then((res) => {
+          if (mountedRef.current && reportIdRef.current === targetReportId) {
+            resolvedStorageUrlsRef.current = res.urls;
+            resolvedAtRef.current = res.allRequiredPhotosResolved ? res.resolvedAt : 0;
+            setResolvedStorageUrls(res.urls);
+
+            if (res.allRequiredPhotosResolved) {
+              retriedErrorPathsRef.current.clear();
+              setStorageUrlError(null);
+            } else {
+              setStorageUrlError(
+                `Signed URL untuk ${res.failedPhotoPaths.length} dari ${res.requiredPhotoPaths.length} foto gagal dibuat dari Supabase Storage.`
+              );
+            }
+          }
+          return res;
+        })
+        .catch((err: any) => {
+          const fallbackRes: ResolveReportStorageUrlsResult = {
+            urls: resolvedStorageUrlsRef.current,
+            requiredPhotoPaths,
+            failedPhotoPaths: requiredPhotoPaths,
+            allRequiredPhotosResolved: requiredPhotoPaths.length === 0,
+            resolvedAt: 0,
+          };
+          if (mountedRef.current && reportIdRef.current === targetReportId) {
+            resolvedAtRef.current = 0;
+            setStorageUrlError(
+              err?.message || 'Gagal membuat Signed URL foto dari Supabase Storage.'
+            );
+          }
+          return fallbackRes;
+        })
+        .finally(() => {
+          if (inFlightResolveRef.current?.promise === promise) {
+            inFlightResolveRef.current = null;
+          }
+          if (mountedRef.current && reportIdRef.current === targetReportId) {
+            setIsResolvingStorageUrls(false);
+          }
+        });
+
+      inFlightResolveRef.current = {
+        reportId: targetReportId,
+        startedAt: Date.now(),
+        promise,
+      };
+
+      return promise;
+    },
+    [report, hasAnyStoragePath, requiredPhotoPaths]
+  );
+
+  useEffect(() => {
+    resolvedStorageUrlsRef.current = {};
+    resolvedAtRef.current = 0;
+    inFlightResolveRef.current = null;
+    retriedErrorPathsRef.current.clear();
+    setResolvedStorageUrls({});
+    setStorageUrlError(null);
+    setPrintError(null);
+    setPopupBlockedError(null);
+
+    if (!hasAnyStoragePath) {
+      setIsResolvingStorageUrls(false);
+      return;
+    }
+
+    void refreshStorageUrls(true);
+
+    const checkAndRefreshIfStale = () => {
+      if (document.visibilityState === 'hidden') return;
+      const isStale =
+        resolvedAtRef.current === 0 ||
+        Date.now() - resolvedAtRef.current >= SIGNED_URL_REFRESH_AFTER_MS;
+      if (isStale) {
+        void refreshStorageUrls(true);
+      }
+    };
+
+    const intervalId = window.setInterval(checkAndRefreshIfStale, 60_000);
+    window.addEventListener('focus', checkAndRefreshIfStale);
+    document.addEventListener('visibilitychange', checkAndRefreshIfStale);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', checkAndRefreshIfStale);
+      document.removeEventListener('visibilitychange', checkAndRefreshIfStale);
+    };
+  }, [report, hasAnyStoragePath, refreshStorageUrls]);
+
+  const handleStorageImageError = useCallback(
+    (storagePath?: string) => {
+      const cleaned = String(storagePath || '').trim();
+      if (!cleaned) return;
+      if (retriedErrorPathsRef.current.has(cleaned)) {
+        setStorageUrlError(
+          'Sebagian foto tidak dapat dimuat meskipun Signed URL telah diperbarui. Periksa koneksi atau hak akses Storage.'
+        );
+        return;
+      }
+      retriedErrorPathsRef.current.add(cleaned);
+      void refreshStorageUrls(true);
+    },
+    [refreshStorageUrls]
+  );
 
   const prio = priorityLabels[report.priority] || priorityLabels.sedang;
   const stat = statusLabels[report.status] || statusLabels.menunggu;
@@ -129,8 +364,110 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
     }
   };
 
-  const handlePrint = () => {
-    openPrintPdfTab(report, appSettings, userProfile);
+  const handlePrint = async () => {
+    if (isPreparingPrint) return;
+    setPrintError(null);
+    setPopupBlockedError(null);
+
+    const hasRequiredStoragePhotos = requiredPhotoPaths.length > 0;
+    const isCacheFresh =
+      resolvedAtRef.current > 0 &&
+      Date.now() - resolvedAtRef.current < SIGNED_URL_REFRESH_AFTER_MS;
+    const allRequiredCached = requiredPhotoPaths.every((p) =>
+      Boolean(resolvedStorageUrlsRef.current[p])
+    );
+
+    if (
+      (!hasRequiredStoragePhotos && !isResolvingStorageUrls) ||
+      (!isResolvingStorageUrls && isCacheFresh && allRequiredCached)
+    ) {
+      const res = openPrintPdfTab(
+        report,
+        appSettings,
+        userProfile,
+        resolvedStorageUrlsRef.current
+      );
+      if (!res.opened) {
+        setPopupBlockedError(
+          'Browser memblokir pembukaan tab baru untuk dokumen PDF. Izinkan popup untuk situs SIBAHAR, lalu klik "Coba Buka Tab PDF Lagi".'
+        );
+      }
+      return;
+    }
+
+    const pendingWin = openPendingPrintTab();
+    if (!pendingWin) {
+      setPopupBlockedError(
+        'Browser memblokir pembukaan tab baru untuk menyiapkan dokumen PDF. Izinkan popup untuk situs SIBAHAR, lalu klik "Coba Buka Tab PDF Lagi".'
+      );
+      void refreshStorageUrls(!isCacheFresh || !allRequiredCached);
+      return;
+    }
+
+    pendingPrintWindowRef.current = pendingWin;
+    setIsPreparingPrint(true);
+    try {
+      const result = await refreshStorageUrls(!isCacheFresh || !allRequiredCached);
+      if (pendingPrintWindowRef.current === pendingWin) {
+        pendingPrintWindowRef.current = null;
+      }
+
+      if (!mountedRef.current) {
+        try {
+          if (!pendingWin.closed) pendingWin.close();
+        } catch {}
+        return;
+      }
+
+      if (!result.allRequiredPhotosResolved) {
+        try {
+          if (!pendingWin.closed) pendingWin.close();
+        } catch {}
+        setPrintError(
+          `Pencetakan PDF dibatalkan: Signed URL untuk ${result.failedPhotoPaths.length} dari ${result.requiredPhotoPaths.length} foto gagal dibuat dari Supabase Storage. Periksa koneksi atau hak akses Storage lalu coba lagi.`
+        );
+        return;
+      }
+
+      if (pendingWin.closed) {
+        setPrintError(
+          'Tab persiapan PDF ditutup sebelum dokumen selesai disusun. Klik "Cetak Laporan PDF" untuk membuka kembali.'
+        );
+        return;
+      }
+
+      const populated = populatePrintPdfTab(
+        pendingWin,
+        report,
+        appSettings,
+        userProfile,
+        result.urls
+      );
+      if (!populated) {
+        try {
+          if (!pendingWin.closed) pendingWin.close();
+        } catch {}
+        setPrintError(
+          'Gagal memuat dokumen PDF ke tab baru yang telah dibuka. Silakan klik "Cetak Laporan PDF" untuk mencoba kembali.'
+        );
+      }
+    } catch (err: any) {
+      if (pendingPrintWindowRef.current === pendingWin) {
+        pendingPrintWindowRef.current = null;
+      }
+      try {
+        if (!pendingWin.closed) pendingWin.close();
+      } catch {}
+      if (!mountedRef.current) return;
+      setPrintError(
+        err?.message ||
+          'Pencetakan PDF dibatalkan karena gagal menyelesaikan Signed URL foto dari Supabase Storage.'
+      );
+    } finally {
+      if (mountedRef.current) {
+        setIsPreparingPrint(false);
+      }
+    }
   };
 
   const getStepIndex = () => {
@@ -341,11 +678,15 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                     {entries.map((entry, idx) => {
                       const entryPrio = priorityLabels[entry.priority] || priorityLabels.sedang;
                       const entryYes = entryHasYesFindings(entry);
+                      const entryDormLabel = formatDormitoryTypesLabel(
+                        entry.dormitoryTypes,
+                        entry.dormitoryType
+                      );
                       return (
                         <tr key={entry.id} className="hover:bg-slate-50/70">
                           <td className="py-2 px-3 text-center font-mono text-slate-500">{idx + 1}</td>
                           <td className="py-2 px-3 font-bold text-emerald-900">{entry.jenjang || '-'}</td>
-                          <td className="py-2 px-3 text-slate-700">{entry.dormitoryType || '-'}</td>
+                          <td className="py-2 px-3 text-slate-700">{entryDormLabel || '-'}</td>
                           <td className="py-2 px-3 text-slate-800 font-medium">
                             {getCategoryDisplayLabel(entry.category, entry.customCategory)}
                           </td>
@@ -448,6 +789,10 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                 const entryYes = entryHasYesFindings(entry);
                 const checklistRows =
                   entry.mode === 'checklist' ? normalizeChecklistAnswers(entry.checklistAnswers) : [];
+                const entryDormLabel = formatDormitoryTypesLabel(
+                  entry.dormitoryTypes,
+                  entry.dormitoryType
+                );
 
                 return (
                   <div
@@ -468,7 +813,7 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                           Jenjang {entry.jenjang || '-'}
                         </span>
                         <span className="text-xs font-semibold text-slate-800">
-                          {entry.dormitoryType || 'Jenis Asrama Tidak Tercatat'}
+                          {entryDormLabel || 'Jenis Asrama Tidak Tercatat'}
                         </span>
                         <span className="text-[11px] text-slate-500">
                           (Bagian {idx + 1})
@@ -528,6 +873,9 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                                     {checklistRows.map((row) => {
                                       const isYes = row.answer === 'ya';
                                       const rowDesc = String(row.description || '').trim();
+                                      const rowPhotos = isYes && Array.isArray(row.attachments)
+                                        ? row.attachments.slice(0, MAX_CHECKLIST_EVIDENCE_PHOTOS)
+                                        : [];
                                       return (
                                         <div
                                           key={row.questionIndex}
@@ -575,6 +923,84 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                                               <p className="text-xs sm:text-sm text-slate-800 whitespace-pre-wrap leading-relaxed text-justify">
                                                 {rowDesc}
                                               </p>
+                                            </div>
+                                          )}
+
+                                          {isYes && rowPhotos.length > 0 && (
+                                            <div className="ml-0 sm:ml-5 p-2.5 rounded-lg bg-white border border-amber-200 space-y-2">
+                                              <p className="text-[11px] font-bold text-amber-950 flex items-center gap-1.5">
+                                                <Camera className="w-3.5 h-3.5 text-amber-700" />
+                                                <span>
+                                                  Eviden / Dokumentasi Foto Pertanyaan No. {row.questionIndex} ({rowPhotos.length} Foto)
+                                                </span>
+                                              </p>
+                                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                                {rowPhotos.map((photo, pIdx) => {
+                                                  const rawPhotoUrl = photo.storagePath
+                                                    ? resolvedStorageUrls[photo.storagePath] || ''
+                                                    : photo.url || photo.dataUrl;
+                                                  const safePhotoUrl = sanitizeImageUrl(rawPhotoUrl);
+                                                  return (
+                                                    <div
+                                                      key={photo.id}
+                                                      className="border border-slate-200 rounded-lg p-2 bg-slate-50/70 space-y-1.5"
+                                                    >
+                                                      {safePhotoUrl ? (
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => {
+                                                            if (
+                                                              photo.storagePath &&
+                                                              (resolvedAtRef.current === 0 ||
+                                                                Date.now() - resolvedAtRef.current >=
+                                                                  SIGNED_URL_REFRESH_AFTER_MS)
+                                                            ) {
+                                                              void refreshStorageUrls(true);
+                                                            }
+                                                            setEnlargedPhoto({
+                                                              url: safePhotoUrl,
+                                                              title: `Eviden Pertanyaan No. ${row.questionIndex} — Foto ${pIdx + 1}`,
+                                                              subtitle: `${entry.jenjang || ''} · ${photo.name}`,
+                                                              storagePath: photo.storagePath,
+                                                            });
+                                                          }}
+                                                          className="w-full h-44 bg-white rounded border border-slate-200 overflow-hidden flex items-center justify-center relative group cursor-zoom-in"
+                                                          title="Klik untuk memperbesar foto eviden"
+                                                        >
+                                                          <img
+                                                            src={safePhotoUrl}
+                                                            alt={`Eviden No.${row.questionIndex} Foto ${pIdx + 1}`}
+                                                            onError={() =>
+                                                              handleStorageImageError(
+                                                                photo.storagePath
+                                                              )
+                                                            }
+                                                            className="max-h-40 w-auto object-contain mx-auto"
+                                                          />
+                                                          <span className="no-print absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded bg-slate-900/75 text-white text-[10px] font-medium flex items-center gap-1 opacity-90 group-hover:opacity-100">
+                                                            <ZoomIn className="w-3 h-3" />
+                                                            <span>Perbesar</span>
+                                                          </span>
+                                                        </button>
+                                                      ) : (
+                                                        <div className="p-4 text-center text-[11px] text-slate-400">
+                                                          {photo.storagePath && isResolvingStorageUrls
+                                                            ? `Memuat Signed URL foto (${photo.name})...`
+                                                            : `Foto tidak dapat dimuat (${photo.name})`}
+                                                        </div>
+                                                      )}
+                                                      <div className="flex items-center justify-between text-[10.5px] text-slate-600 pt-0.5">
+                                                        <span className="truncate font-medium">
+                                                          Foto {pIdx + 1}: {photo.name}
+                                                        </span>
+                                                        <span className="font-mono text-slate-400 shrink-0 ml-1">
+                                                          ({formatFileSize(photo.size)})
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
                                             </div>
                                           )}
                                         </div>
@@ -643,18 +1069,50 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 {report.attachments.map((file, idx) => {
-                  const safeFileUrl = sanitizeImageUrl(file.dataUrl);
+                  const rawFileUrl = file.storagePath
+                    ? resolvedStorageUrls[file.storagePath] || ''
+                    : file.url || file.dataUrl;
+                  const safeFileUrl = isImageAttachmentFile(file)
+                    ? sanitizeImageUrl(rawFileUrl)
+                    : null;
+                  const safeDocUrl = !isImageAttachmentFile(file)
+                    ? sanitizeImageUrl(rawFileUrl)
+                    : null;
                   return (
                   <div key={file.id} className="border border-slate-200 rounded-lg overflow-hidden bg-white shadow-2xs print:border-slate-300">
                     {safeFileUrl ? (
                       <div className="p-2 flex flex-col items-center">
-                        <div className="w-full flex items-center justify-center bg-slate-100 rounded p-1 mb-1.5 max-h-56 sm:max-h-64 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (
+                              file.storagePath &&
+                              (resolvedAtRef.current === 0 ||
+                                Date.now() - resolvedAtRef.current >= SIGNED_URL_REFRESH_AFTER_MS)
+                            ) {
+                              void refreshStorageUrls(true);
+                            }
+                            setEnlargedPhoto({
+                              url: safeFileUrl,
+                              title: `Dokumentasi Bukti Foto ${idx + 1}`,
+                              subtitle: file.name,
+                              storagePath: file.storagePath,
+                            });
+                          }}
+                          className="w-full flex items-center justify-center bg-slate-100 rounded p-1 mb-1.5 max-h-56 sm:max-h-64 overflow-hidden relative group cursor-zoom-in"
+                          title="Klik untuk memperbesar foto"
+                        >
                           <img
                             src={safeFileUrl}
                             alt={`Bukti Foto ${idx + 1}: ${file.name}`}
+                            onError={() => handleStorageImageError(file.storagePath)}
                             className="max-h-52 sm:max-h-60 w-auto object-contain mx-auto"
                           />
-                        </div>
+                          <span className="no-print absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded bg-slate-900/75 text-white text-[10px] font-medium flex items-center gap-1 opacity-85 group-hover:opacity-100">
+                            <ZoomIn className="w-3 h-3" />
+                            <span>Perbesar</span>
+                          </span>
+                        </button>
                         <div className="w-full pt-1 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-600">
                           <span className="truncate font-medium">{file.name}</span>
                           <span className="text-[10px] text-slate-400 font-mono shrink-0 ml-1">({formatFileSize(file.size)})</span>
@@ -669,13 +1127,22 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                             <p className="text-[10px] text-slate-400 font-mono">{formatFileSize(file.size)}</p>
                           </div>
                         </div>
-                        <button
-                          onClick={() => alert(`Mengunduh berkas: ${file.name}`)}
-                          className="p-1.5 text-slate-500 hover:text-indigo-600 rounded transition no-print"
-                          title="Unduh berkas"
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
+                        {safeDocUrl ? (
+                          <a
+                            href={safeDocUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={file.name}
+                            className="p-1.5 text-slate-500 hover:text-indigo-600 rounded transition no-print"
+                            title="Unduh / buka berkas"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 no-print shrink-0">
+                            Metadata berkas
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -792,60 +1259,199 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
         </div>
 
         {/* Modal Bottom Actions (Hidden on print) */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between flex-wrap gap-3 shrink-0 no-print">
-          {/* Quick status change buttons */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-slate-500 mr-1 hidden sm:inline">Ubah Status:</span>
-            {report.status !== 'diproses' && report.status !== 'selesai' && (
-              <button
-                type="button"
-                disabled={isUpdatingStatus || isAddingNote}
-                onClick={() => handleStatusChangeSubmit('diproses')}
-                className="px-2.5 py-1.5 text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 border border-amber-300 rounded-md transition cursor-pointer"
-              >
-                {isUpdatingStatus ? 'Memproses...' : 'Tandai Diproses'}
-              </button>
-            )}
-            {report.status !== 'selesai' && (
-              <button
-                type="button"
-                disabled={isUpdatingStatus || isAddingNote}
-                onClick={() => handleStatusChangeSubmit('selesai')}
-                className="px-2.5 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 border border-emerald-300 rounded-md transition cursor-pointer"
-              >
-                {isUpdatingStatus ? 'Memproses...' : 'Tandai Selesai'}
-              </button>
-            )}
-            {report.status !== 'ditolak' && report.status !== 'selesai' && (
-              <button
-                type="button"
-                disabled={isUpdatingStatus || isAddingNote}
-                onClick={() => handleStatusChangeSubmit('ditolak')}
-                className="px-2.5 py-1.5 text-xs font-medium text-rose-800 bg-rose-50 hover:bg-rose-100 disabled:opacity-50 border border-rose-300 rounded-md transition cursor-pointer"
-              >
-                {isUpdatingStatus ? 'Memproses...' : 'Tolak'}
-              </button>
-            )}
-          </div>
+        <div className="border-t border-slate-200 bg-slate-50 shrink-0 no-print">
+          {popupBlockedError && (
+            <div
+              role="alert"
+              className="mx-4 mt-3 p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 text-xs flex items-start justify-between gap-2"
+            >
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Tab PDF Diblokir oleh Browser</p>
+                  <p className="mt-0.5">{popupBlockedError}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={isPreparingPrint}
+                  onClick={() => void handlePrint()}
+                  className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                >
+                  <Printer className="w-3 h-3" />
+                  <span>Coba Buka Tab PDF Lagi</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPopupBlockedError(null)}
+                  className="text-amber-800 hover:text-amber-950 font-semibold px-2 py-1 rounded hover:bg-amber-100 cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          )}
 
-          <div className="flex items-center gap-2 ml-auto">
-            <button
-              onClick={handlePrint}
-              className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition flex items-center gap-1.5 shadow-xs"
+          {(printError || storageUrlError) && (
+            <div
+              role="alert"
+              className="mx-4 mt-3 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs flex items-start justify-between gap-2"
             >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Cetak Laporan PDF</span>
-            </button>
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 transition"
-            >
-              Tutup Jendela
-            </button>
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">
+                    {printError ? 'Gagal Menyiapkan Cetak PDF' : 'Gagal Memuat Foto Storage'}
+                  </p>
+                  <p className="mt-0.5">{printError || storageUrlError}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={isResolvingStorageUrls || isPreparingPrint}
+                  onClick={() => {
+                    setPrintError(null);
+                    void refreshStorageUrls(true);
+                  }}
+                  className="px-2.5 py-1 rounded bg-white border border-rose-300 text-rose-800 hover:bg-rose-100 font-semibold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isResolvingStorageUrls ? 'animate-spin' : ''}`} />
+                  <span>Muat Ulang Foto</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPrintError(null);
+                    setStorageUrlError(null);
+                  }}
+                  className="text-rose-600 hover:text-rose-900 font-semibold px-2 py-1 rounded hover:bg-rose-100 cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="p-4 flex items-center justify-between flex-wrap gap-3">
+            {/* Quick status change buttons */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-500 mr-1 hidden sm:inline">Ubah Status:</span>
+              {report.status !== 'diproses' && report.status !== 'selesai' && (
+                <button
+                  type="button"
+                  disabled={isUpdatingStatus || isAddingNote}
+                  onClick={() => handleStatusChangeSubmit('diproses')}
+                  className="px-2.5 py-1.5 text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 border border-amber-300 rounded-md transition cursor-pointer"
+                >
+                  {isUpdatingStatus ? 'Memproses...' : 'Tandai Diproses'}
+                </button>
+              )}
+              {report.status !== 'selesai' && (
+                <button
+                  type="button"
+                  disabled={isUpdatingStatus || isAddingNote}
+                  onClick={() => handleStatusChangeSubmit('selesai')}
+                  className="px-2.5 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 border border-emerald-300 rounded-md transition cursor-pointer"
+                >
+                  {isUpdatingStatus ? 'Memproses...' : 'Tandai Selesai'}
+                </button>
+              )}
+              {report.status !== 'ditolak' && report.status !== 'selesai' && (
+                <button
+                  type="button"
+                  disabled={isUpdatingStatus || isAddingNote}
+                  onClick={() => handleStatusChangeSubmit('ditolak')}
+                  className="px-2.5 py-1.5 text-xs font-medium text-rose-800 bg-rose-50 hover:bg-rose-100 disabled:opacity-50 border border-rose-300 rounded-md transition cursor-pointer"
+                >
+                  {isUpdatingStatus ? 'Memproses...' : 'Tolak'}
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                disabled={isPreparingPrint}
+                onClick={() => void handlePrint()}
+                className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 rounded-lg transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                {isPreparingPrint ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Printer className="w-3.5 h-3.5" />
+                )}
+                <span>{isPreparingPrint ? 'Menyiapkan Foto PDF...' : 'Cetak Laporan PDF'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+              >
+                Tutup Jendela
+              </button>
+            </div>
           </div>
         </div>
 
       </div>
+
+      {/* Modal Perbesar Foto Eviden / Lampiran untuk Pemeriksaan Kepala Sekolah */}
+      {enlargedPhoto && (
+        <div
+          className="fixed inset-0 z-60 bg-slate-900/85 backdrop-blur-xs flex items-center justify-center p-4 no-print"
+          onClick={() => setEnlargedPhoto(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl max-w-3xl w-full overflow-hidden border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-2 bg-slate-50">
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-900 truncate">
+                  {enlargedPhoto.title}
+                </p>
+                {enlargedPhoto.subtitle && (
+                  <p className="text-[11px] text-slate-500 truncate">{enlargedPhoto.subtitle}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEnlargedPhoto(null)}
+                className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-200/70 rounded-lg cursor-pointer shrink-0"
+                aria-label="Tutup perbesaran foto"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 bg-slate-950 flex items-center justify-center max-h-[80vh]">
+              {(() => {
+                const liveEnlargedUrl = enlargedPhoto.storagePath
+                  ? sanitizeImageUrl(resolvedStorageUrls[enlargedPhoto.storagePath] || '')
+                  : enlargedPhoto.url;
+                if (!liveEnlargedUrl) {
+                  return (
+                    <div className="py-12 text-center text-xs text-slate-300">
+                      {isResolvingStorageUrls
+                        ? 'Memperbarui Signed URL foto...'
+                        : 'Foto tidak dapat dimuat (Signed URL tidak tersedia).'}
+                    </div>
+                  );
+                }
+                return (
+                  <img
+                    src={liveEnlargedUrl}
+                    alt={enlargedPhoto.title}
+                    onError={() => handleStorageImageError(enlargedPhoto.storagePath)}
+                    className="max-h-[72vh] max-w-full object-contain rounded"
+                  />
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

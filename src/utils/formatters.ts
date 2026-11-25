@@ -1,6 +1,9 @@
 import {
+  AttachmentFile,
   CHECKLIST_QUESTIONS,
   ChecklistItemResponse,
+  DORMITORY_OPTIONS,
+  DormitoryType,
   JenjangType,
   ReportCategory,
   ReportItem,
@@ -299,7 +302,78 @@ export const statusLabels: Record<ReportStatus, { label: string; colorClass: str
   },
 };
 
-// ================= HELPER ENTRI JENJANG & CHECKLIST =================
+export const MAX_CHECKLIST_EVIDENCE_PHOTOS = 2;
+
+export function normalizeDormitoryTypes(
+  rawDormitoryTypes?: unknown,
+  rawDormitoryType?: unknown
+): DormitoryType[] {
+  const selected = new Set<DormitoryType>();
+
+  if (Array.isArray(rawDormitoryTypes)) {
+    rawDormitoryTypes.forEach((val) => {
+      const s = String(val || '').trim();
+      if (s === 'Asrama Putera' || s === 'Asrama Puteri') {
+        selected.add(s);
+      }
+    });
+  }
+
+  if (selected.size === 0 && typeof rawDormitoryType === 'string' && rawDormitoryType.trim()) {
+    const rawStr = rawDormitoryType.trim();
+    const lower = rawStr.toLowerCase();
+    if (lower.includes('putera') || lower.includes('putra')) {
+      selected.add('Asrama Putera');
+    }
+    if (lower.includes('puteri') || lower.includes('putri')) {
+      selected.add('Asrama Puteri');
+    }
+  }
+
+  return DORMITORY_OPTIONS.filter((opt) => selected.has(opt));
+}
+
+export function formatDormitoryTypesLabel(
+  dormitoryTypes?: DormitoryType[],
+  fallbackDormitoryType?: string
+): string {
+  const normalized = normalizeDormitoryTypes(dormitoryTypes, fallbackDormitoryType);
+  if (normalized.length === 0) return '';
+  return normalized.join(' & ');
+}
+
+const IMAGE_FILE_EXT_REGEX = /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i;
+
+export function isImageAttachmentFile(att: {
+  name?: string;
+  type?: string;
+  dataUrl?: string;
+}): boolean {
+  const mime = String(att?.type || '').toLowerCase();
+  if (mime.startsWith('image/')) return true;
+  const dataUrl = String(att?.dataUrl || '').toLowerCase();
+  if (dataUrl.startsWith('data:image/')) return true;
+  return IMAGE_FILE_EXT_REGEX.test(String(att?.name || ''));
+}
+
+export function normalizeChecklistAttachment(raw: any, fallbackIndex: number): AttachmentFile | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const url = typeof raw.url === 'string' ? raw.url.trim() : '';
+  const dataUrl = typeof raw.dataUrl === 'string' ? raw.dataUrl.trim() : '';
+  const storagePath = typeof raw.storagePath === 'string' ? raw.storagePath.trim() : '';
+  if (!url && !dataUrl && !storagePath) return null;
+
+  return {
+    id: String(raw.id || `ev-${Date.now().toString(36)}-${fallbackIndex}`),
+    name: String(raw.name || `eviden_${fallbackIndex + 1}.jpg`),
+    size: Number(raw.size) > 0 ? Number(raw.size) : 0,
+    type: String(raw.type || 'image/jpeg'),
+    ...(storagePath ? { storagePath } : {}),
+    ...(url ? { url } : {}),
+    ...(dataUrl ? { dataUrl } : {}),
+    ...(Number(raw.originalSize) > 0 ? { originalSize: Number(raw.originalSize) } : {}),
+  };
+}
 
 export function createDefaultChecklistAnswers(): ChecklistItemResponse[] {
   return CHECKLIST_QUESTIONS.map((question, idx) => ({
@@ -307,6 +381,7 @@ export function createDefaultChecklistAnswers(): ChecklistItemResponse[] {
     question,
     answer: '',
     description: '',
+    attachments: [],
   }));
 }
 
@@ -319,11 +394,17 @@ export function normalizeChecklistAnswers(
       const qIndex = Number(item?.questionIndex) || idx + 1;
       const ans = item?.answer === 'ya' || item?.answer === 'tidak' ? item.answer : '';
       const rawDesc = typeof item?.description === 'string' ? item.description : '';
+      const rawAtts = Array.isArray(item?.attachments)
+        ? item.attachments
+            .map((att, attIdx) => normalizeChecklistAttachment(att, attIdx))
+            .filter((att): att is AttachmentFile => Boolean(att))
+        : [];
       byIndex.set(qIndex, {
         questionIndex: qIndex,
         question: CHECKLIST_QUESTIONS[qIndex - 1] || item?.question || `Pertanyaan ${qIndex}`,
         answer: ans,
         description: ans === 'tidak' ? '' : rawDesc,
+        attachments: ans === 'tidak' ? [] : rawAtts,
       });
     });
   }
@@ -337,6 +418,7 @@ export function normalizeChecklistAnswers(
         question,
         answer: '',
         description: '',
+        attachments: [],
       }
     );
   });
@@ -356,6 +438,7 @@ export function createEmptyJenjangEntry(jenjang: JenjangType | '' = ''): ReportJ
     id: `entry-${rand}-${Date.now().toString(36)}`,
     jenjang,
     dormitoryType: '',
+    dormitoryTypes: [],
     category: '',
     customCategory: '',
     priority: 'sedang',
@@ -371,6 +454,8 @@ export function normalizeJenjangEntry(raw: any, index = 0): ReportJenjangEntry {
   const checklistAnswers = normalizeChecklistAnswers(raw?.checklistAnswers);
   const hasYesAnswer =
     mode === 'checklist' && checklistAnswers.some((item) => item.answer === 'ya');
+  const dormitoryTypes = normalizeDormitoryTypes(raw?.dormitoryTypes, raw?.dormitoryType);
+  const dormitoryType = formatDormitoryTypesLabel(dormitoryTypes, raw?.dormitoryType);
 
   return {
     id: String(raw?.id || `entry-${index + 1}`),
@@ -378,10 +463,8 @@ export function normalizeJenjangEntry(raw: any, index = 0): ReportJenjangEntry {
       raw?.jenjang === 'SRD' || raw?.jenjang === 'SRMP' || raw?.jenjang === 'SRMA'
         ? raw.jenjang
         : '',
-    dormitoryType:
-      raw?.dormitoryType === 'Asrama Putera' || raw?.dormitoryType === 'Asrama Puteri'
-        ? raw.dormitoryType
-        : '',
+    dormitoryType,
+    dormitoryTypes,
     category: (raw?.category || '') as ReportCategory | '',
     customCategory: typeof raw?.customCategory === 'string' ? raw.customCategory : '',
     priority: (raw?.priority || 'sedang') as ReportPriority,
@@ -413,9 +496,11 @@ export interface EntryValidationErrors {
   customCategory?: string;
   checklist?: string;
   checklistDescriptions?: string;
+  checklistAttachments?: string;
   unansweredIndices?: number[];
   missingYesDescriptionIndices?: number[];
   yesDescriptionErrors?: Record<number, string>;
+  yesAttachmentErrors?: Record<number, string>;
   incidentDescription?: string;
 }
 
@@ -450,8 +535,10 @@ export function validateJenjangEntries(entries: ReportJenjangEntry[]): {
       seenJenjang.set(entry.jenjang, entry.id);
     }
 
-    if (!entry.dormitoryType) {
-      errs.dormitoryType = 'Jenis Asrama wajib diisi (Asrama Putera / Asrama Puteri).';
+    const normalizedDorms = normalizeDormitoryTypes(entry.dormitoryTypes, entry.dormitoryType);
+    if (normalizedDorms.length === 0) {
+      errs.dormitoryType =
+        'Pilih minimal satu Jenis Asrama (Asrama Putera dan/atau Asrama Puteri).';
       if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.dormitoryType}`;
     }
 
@@ -477,11 +564,23 @@ export function validateJenjangEntries(entries: ReportJenjangEntry[]): {
 
       const missingYesDescriptionIndices: number[] = [];
       const yesDescriptionErrors: Record<number, string> = {};
+      const yesAttachmentErrors: Record<number, string> = {};
+      const overLimitAttachmentIndices: number[] = [];
+
       normalizedAnswers.forEach((item) => {
         if (item.answer === 'ya' && !String(item.description || '').trim()) {
           missingYesDescriptionIndices.push(item.questionIndex);
           yesDescriptionErrors[item.questionIndex] =
             'Deskripsi kondisi wajib diisi karena jawaban pertanyaan ini adalah Ya.';
+        }
+        if (
+          item.answer === 'ya' &&
+          Array.isArray(item.attachments) &&
+          item.attachments.length > MAX_CHECKLIST_EVIDENCE_PHOTOS
+        ) {
+          overLimitAttachmentIndices.push(item.questionIndex);
+          yesAttachmentErrors[item.questionIndex] =
+            `Maksimal ${MAX_CHECKLIST_EVIDENCE_PHOTOS} foto eviden per pertanyaan jawaban Ya.`;
         }
       });
 
@@ -490,6 +589,12 @@ export function validateJenjangEntries(entries: ReportJenjangEntry[]): {
         errs.yesDescriptionErrors = yesDescriptionErrors;
         errs.checklistDescriptions = `Deskripsi kondisi wajib diisi untuk pertanyaan jawaban "Ya" nomor: ${missingYesDescriptionIndices.join(', ')}.`;
         if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.checklistDescriptions}`;
+      }
+
+      if (overLimitAttachmentIndices.length > 0) {
+        errs.yesAttachmentErrors = yesAttachmentErrors;
+        errs.checklistAttachments = `Maksimal ${MAX_CHECKLIST_EVIDENCE_PHOTOS} foto eviden pada pertanyaan nomor: ${overLimitAttachmentIndices.join(', ')}.`;
+        if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.checklistAttachments}`;
       }
     } else {
       if (!String(entry.incidentDescription || '').trim()) {
@@ -530,10 +635,20 @@ export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): 
 } {
   const normalizedEntries = entries.map((entry, idx) => {
     const normalized = normalizeJenjangEntry(entry, idx);
+    const dormitoryTypes = normalizeDormitoryTypes(
+      normalized.dormitoryTypes,
+      normalized.dormitoryType
+    );
+    const dormitoryType = formatDormitoryTypesLabel(dormitoryTypes, normalized.dormitoryType);
+
     if (normalized.mode === 'checklist') {
       const cleanedAnswers = (normalized.checklistAnswers || []).map((item) => ({
         ...item,
         description: item.answer === 'ya' ? String(item.description || '').trim() : '',
+        attachments:
+          item.answer === 'ya'
+            ? (item.attachments || []).slice(0, MAX_CHECKLIST_EVIDENCE_PHOTOS)
+            : [],
       }));
       const yesItems = cleanedAnswers.filter((item) => item.answer === 'ya');
       const hasYes = yesItems.length > 0;
@@ -548,6 +663,8 @@ export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): 
 
       return {
         ...normalized,
+        dormitoryTypes,
+        dormitoryType,
         checklistAnswers: cleanedAnswers,
         hasYesAnswer: hasYes,
         incidentDescription: perQuestionSummary,
@@ -555,6 +672,8 @@ export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): 
     }
     return {
       ...normalized,
+      dormitoryTypes,
+      dormitoryType,
       hasYesAnswer: false,
       incidentDescription: String(normalized.incidentDescription || '').trim(),
     };
@@ -583,7 +702,9 @@ export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): 
   const descriptionParts = normalizedEntries.map((entry) => {
     const catLabel = getCategoryDisplayLabel(entry.category, entry.customCategory);
     const prioLabel = priorityLabels[entry.priority]?.label || entry.priority;
-    const header = `[${entry.jenjang || '-'} · ${entry.dormitoryType || '-'} · ${catLabel} · ${prioLabel}]`;
+    const dormLabel =
+      formatDormitoryTypesLabel(entry.dormitoryTypes, entry.dormitoryType) || '-';
+    const header = `[${entry.jenjang || '-'} · ${dormLabel} · ${catLabel} · ${prioLabel}]`;
 
     if (entry.mode === 'checklist') {
       const yesItems = (entry.checklistAnswers || []).filter((q) => q.answer === 'ya');
@@ -592,10 +713,11 @@ export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): 
       }
       const yesNums = yesItems.map((q) => `No.${q.questionIndex}`).join(', ');
       const perQuestionDetails = yesItems
-        .map(
-          (q) =>
-            `${q.questionIndex}. ${q.question}\n   Jawaban: YA\n   Deskripsi kondisi: ${q.description || '-'}`
-        )
+        .map((q) => {
+          const photoCount = Array.isArray(q.attachments) ? q.attachments.length : 0;
+          const photoSuffix = photoCount > 0 ? `\n   Eviden Foto: ${photoCount} foto` : '';
+          return `${q.questionIndex}. ${q.question}\n   Jawaban: YA\n   Deskripsi kondisi: ${q.description || '-'}${photoSuffix}`;
+        })
         .join('\n');
       return `${header}\nChecklist Kondisi Sekolah/Asrama (${yesItems.length} temuan Ya: ${yesNums}):\n${perQuestionDetails}`;
     }
@@ -685,7 +807,8 @@ export function reportMatchesSearchQuery(report: ReportItem, query: string): boo
   if (Array.isArray(report.entries)) {
     for (const entry of report.entries) {
       if ((entry.jenjang || '').toLowerCase().includes(q)) return true;
-      if ((entry.dormitoryType || '').toLowerCase().includes(q)) return true;
+      const dormLabel = formatDormitoryTypesLabel(entry.dormitoryTypes, entry.dormitoryType);
+      if (dormLabel.toLowerCase().includes(q)) return true;
       if (getCategoryDisplayLabel(entry.category, entry.customCategory).toLowerCase().includes(q)) {
         return true;
       }

@@ -29,6 +29,7 @@ import {
   statusLabels, 
   formatDateOnly, 
   formatReportTicketNumber,
+  formatDormitoryTypesLabel,
   NEW_CATEGORY_OPTIONS,
   LEGACY_CATEGORY_OPTIONS,
   getCategoryDisplayLabel,
@@ -649,7 +650,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                               key={ent.id}
                               className="text-[10.5px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200"
                             >
-                              <strong>{ent.jenjang}</strong> ({ent.dormitoryType || '-'}): {getCategoryDisplayLabel(ent.category, ent.customCategory)} · {entPrio.label}
+                              <strong>{ent.jenjang}</strong> ({formatDormitoryTypesLabel(ent.dormitoryTypes, ent.dormitoryType) || '-'}): {getCategoryDisplayLabel(ent.category, ent.customCategory)} · {entPrio.label}
                             </span>
                           );
                         })}

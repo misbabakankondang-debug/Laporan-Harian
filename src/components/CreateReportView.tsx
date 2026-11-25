@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   FilePlus,
   Clock,
@@ -14,6 +14,7 @@ import {
   Trash2,
   ExternalLink,
   Plus,
+  Loader2,
 } from 'lucide-react';
 import {
   ReportItem,
@@ -27,15 +28,24 @@ import {
   formatFileSize,
   formatDateOnly,
   formatReportTicketNumber,
+  formatDormitoryTypesLabel,
   createEmptyJenjangEntry,
   normalizeJenjangEntry,
   validateJenjangEntries,
   buildReportSummariesFromEntries,
   getReportJenjangBadgeList,
   getReportEntriesSummaryCategories,
+  isImageAttachmentFile,
   EntryValidationErrors,
 } from '../utils/formatters';
-import { SubmitReportResult } from '../lib/supabase';
+import {
+  SubmitReportResult,
+  getStorageAttachmentPublicUrl,
+  resolveAttachmentDisplayUrls,
+  uploadAttachmentToStorage,
+} from '../lib/supabase';
+import { compressEvidenceImage } from '../utils/imageCompression';
+import { sanitizeImageUrl } from '../utils/printPdf';
 import { TabType } from './Sidebar';
 import { SignaturePadInput } from './SignaturePadInput';
 import { JenjangEntryFormCard } from './JenjangEntryFormCard';
@@ -49,6 +59,9 @@ interface CreateReportViewProps {
   onViewReportDetail: (report: ReportItem) => void;
   onDeleteDraft?: (draftId: string) => void;
 }
+
+const createUploadSessionKey = (): string =>
+  `ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
 
 export const CreateReportView: React.FC<CreateReportViewProps> = ({
   reports,
@@ -69,6 +82,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [reporterSignature, setReporterSignature] = useState<string>('');
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [uploadSessionKey, setUploadSessionKey] = useState<string>(() => createUploadSessionKey());
 
   // Multi-jenjang entries state (Entri pertama jenjang dipilih di awal formulir sebelum Judul)
   const [entries, setEntries] = useState<ReportJenjangEntry[]>(() => [
@@ -78,6 +92,10 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   // Independent errors per field & per entry
   const [titleError, setTitleError] = useState('');
   const [entryErrors, setEntryErrors] = useState<Record<string, EntryValidationErrors>>({});
+  const [uploadingEntries, setUploadingEntries] = useState<Record<string, boolean>>({});
+  const [isModeBUploading, setIsModeBUploading] = useState(false);
+  const [modeBUploadNotice, setModeBUploadNotice] = useState<string | null>(null);
+  const [resolvedModeBUrls, setResolvedModeBUrls] = useState<Record<string, string>>({});
 
   // Penanggung Jawab otomatis terisi dari akun profil pengguna yang sedang login
   const picName = userProfile.name;
@@ -92,6 +110,35 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const latestAttachmentsRef = useRef<AttachmentFile[]>(attachments);
+  latestAttachmentsRef.current = attachments;
+
+  useEffect(() => {
+    const missingPaths = attachments.filter(
+      (att) => att.storagePath && !resolvedModeBUrls[att.storagePath]
+    );
+    if (missingPaths.length === 0) return;
+
+    let cancelled = false;
+    void resolveAttachmentDisplayUrls(missingPaths, 3600).then((urls) => {
+      if (cancelled || Object.keys(urls).length === 0) return;
+      setResolvedModeBUrls((prev) => ({ ...prev, ...urls }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [attachments, resolvedModeBUrls]);
+
+  const isAnyEntryPhotoUploading = Object.values(uploadingEntries).some(Boolean);
+  const isAnyPhotoUploading = isAnyEntryPhotoUploading || isModeBUploading;
+  const hasAnyOtherModeEntry = entries.some((e) => e.mode === 'other');
+
+  const handleEntryUploadingChange = useCallback((entryId: string, isUploading: boolean) => {
+    setUploadingEntries((prev) => {
+      if (Boolean(prev[entryId]) === isUploading) return prev;
+      return { ...prev, [entryId]: isUploading };
+    });
+  }, []);
 
   // Compute summary metrics
   const draftReports = reports.filter((r) => r.status === 'draft');
@@ -141,59 +188,125 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     });
   };
 
-  // Handle file uploads (Maksimal 2 gambar/berkas)
-  const handleFiles = (fileList: FileList | null) => {
+  // Handle file uploads Mode B (Maksimal 2 berkas; gambar wajib dikompresi & diunggah ke Supabase Storage)
+  const handleFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
 
-    if (attachments.length + fileList.length > 2) {
-      alert('Lampiran dokumen/bukti foto maksimal 2 gambar.');
+    const currentAttachments = latestAttachmentsRef.current;
+    if (currentAttachments.length >= 2) {
+      setModeBUploadNotice('Batas maksimal lampiran Mode B adalah 2 berkas. Hapus salah satu berkas terlebih dahulu.');
       return;
     }
 
-    const newAttachments: AttachmentFile[] = [];
-    Array.from(fileList).forEach((f) => {
-      if (f.size > 10 * 1024 * 1024) {
-        alert(`Berkas ${f.name} melebihi batas 10MB.`);
-        return;
-      }
+    const availableSlots = 2 - currentAttachments.length;
+    const filesArray = Array.from(fileList);
+    const filesToProcess = filesArray.slice(0, availableSlots);
+    const notices: string[] = [];
 
-      const reader = new FileReader();
-      const attId = 'att-' + Math.random().toString(36).substring(2, 9);
+    if (filesArray.length > availableSlots) {
+      notices.push(`Hanya ${availableSlots} berkas pertama yang diproses (maksimal 2 berkas).`);
+    }
 
-      if (f.type.startsWith('image/')) {
-        reader.onload = (e) => {
-          setAttachments((prev) => {
-            if (prev.length >= 2) return prev;
-            return [
-              ...prev,
-              {
+    setModeBUploadNotice(null);
+    setIsModeBUploading(true);
+
+    const confirmedUploads: AttachmentFile[] = [];
+    const newlyResolvedUrls: Record<string, string> = {};
+    const failedFileReasons: string[] = [];
+
+    try {
+      const folderKey = `${editingDraftId || uploadSessionKey}/mode-b`;
+
+      for (const rawFile of filesToProcess) {
+        const attId = `att-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
+        const isImg = isImageAttachmentFile({ name: rawFile.name, type: rawFile.type });
+
+        try {
+          if (isImg) {
+            const compressed = await compressEvidenceImage(rawFile);
+            const storageRes = await uploadAttachmentToStorage(compressed.file, folderKey);
+
+            if (storageRes.confirmed && storageRes.storagePath) {
+              confirmedUploads.push({
                 id: attId,
-                name: f.name,
-                size: f.size,
-                type: f.type,
-                dataUrl: e.target?.result as string,
-              },
-            ];
-          });
-        };
-        reader.readAsDataURL(f);
-      } else {
-        newAttachments.push({
-          id: attId,
-          name: f.name,
-          size: f.size,
-          type: f.type,
-        });
-      }
-    });
+                name: compressed.file.name,
+                size: compressed.compressedSize,
+                originalSize: compressed.originalSize,
+                type: 'image/jpeg',
+                storagePath: storageRes.storagePath,
+              });
+              if (storageRes.previewUrl) {
+                newlyResolvedUrls[storageRes.storagePath] = storageRes.previewUrl;
+              }
+            } else {
+              failedFileReasons.push(
+                `"${rawFile.name}" (${storageRes.error || 'upload ke Supabase Storage gagal'})`
+              );
+            }
+          } else {
+            if (rawFile.size <= 0) {
+              failedFileReasons.push(`"${rawFile.name}" (file kosong/rusak)`);
+              continue;
+            }
+            if (rawFile.size > 10 * 1024 * 1024) {
+              failedFileReasons.push(`"${rawFile.name}" (melebihi batas 10 MB)`);
+              continue;
+            }
 
-    if (newAttachments.length > 0) {
-      setAttachments((prev) => [...prev, ...newAttachments].slice(0, 2));
+            const storageRes = await uploadAttachmentToStorage(rawFile, folderKey);
+            if (storageRes.confirmed && storageRes.storagePath) {
+              confirmedUploads.push({
+                id: attId,
+                name: rawFile.name,
+                size: rawFile.size,
+                type: rawFile.type || 'application/octet-stream',
+                storagePath: storageRes.storagePath,
+              });
+              if (storageRes.previewUrl) {
+                newlyResolvedUrls[storageRes.storagePath] = storageRes.previewUrl;
+              }
+            } else {
+              failedFileReasons.push(
+                `"${rawFile.name}" (${storageRes.error || 'upload ke Supabase Storage gagal'})`
+              );
+            }
+          }
+        } catch (err: any) {
+          failedFileReasons.push(
+            `"${rawFile.name}" (${err?.message || 'gagal memproses file'})`
+          );
+        }
+      }
+
+      if (Object.keys(newlyResolvedUrls).length > 0) {
+        setResolvedModeBUrls((prev) => ({ ...prev, ...newlyResolvedUrls }));
+      }
+
+      if (confirmedUploads.length > 0) {
+        setAttachments((prev) => [...prev, ...confirmedUploads].slice(0, 2));
+      }
+
+      if (failedFileReasons.length > 0) {
+        const partialInfo =
+          confirmedUploads.length > 0
+            ? ` (${confirmedUploads.length} berkas lain berhasil diunggah dan dipertahankan).`
+            : ' Laporan tetap dapat dikirim tanpa berkas tersebut.';
+        notices.push(
+          `Berkas ${failedFileReasons.join(', ')} gagal diunggah dan tidak akan disertakan dalam laporan.${partialInfo}`
+        );
+      }
+
+      if (notices.length > 0) {
+        setModeBUploadNotice(notices.join(' '));
+      }
+    } finally {
+      setIsModeBUploading(false);
     }
   };
 
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
+    setModeBUploadNotice(null);
   };
 
   const validateAll = (): boolean => {
@@ -222,6 +335,10 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAnyPhotoUploading) {
+      setSubmitError('Tunggu hingga proses kompresi & unggah foto selesai sebelum mengirim laporan.');
+      return;
+    }
     if (!validateAll()) return;
 
     setSubmitError(null);
@@ -249,7 +366,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         picName: picName.trim() || userProfile.name,
         picRole: picRole.trim() || userProfile.role,
         picNip: picNip.trim() || userProfile.nip,
-        attachments,
+        attachments: hasAnyOtherModeEntry ? attachments : [],
         reporterSignature: reporterSignature || undefined,
       });
 
@@ -275,15 +392,25 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   };
 
   const handleSaveDraft = () => {
+    if (isAnyPhotoUploading) {
+      alert('Tunggu hingga proses unggah foto selesai sebelum menyimpan draft.');
+      return;
+    }
+
     const hasAnyEntryInput = entries.some(
       (e) =>
         Boolean(e.jenjang) ||
         Boolean(e.dormitoryType) ||
+        (Array.isArray(e.dormitoryTypes) && e.dormitoryTypes.length > 0) ||
         Boolean(e.category) ||
         Boolean(e.customCategory?.trim()) ||
         Boolean(e.incidentDescription?.trim()) ||
         (e.checklistAnswers || []).some(
-          (q) => q.answer === 'ya' || q.answer === 'tidak' || Boolean(q.description?.trim())
+          (q) =>
+            q.answer === 'ya' ||
+            q.answer === 'tidak' ||
+            Boolean(q.description?.trim()) ||
+            (Array.isArray(q.attachments) && q.attachments.length > 0)
         )
     );
 
@@ -302,7 +429,10 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     const summaryDesc =
       preservedEntries
         .map((e) => {
-          const head = `[${e.jenjang || 'Jenjang belum dipilih'} · ${e.dormitoryType || 'Asrama belum dipilih'}]`;
+          const dormLabel =
+            formatDormitoryTypesLabel(e.dormitoryTypes, e.dormitoryType) ||
+            'Asrama belum dipilih';
+          const head = `[${e.jenjang || 'Jenjang belum dipilih'} · ${dormLabel}]`;
           if (e.mode === 'checklist') {
             const yesWithDesc = (e.checklistAnswers || [])
               .filter((q) => q.answer === 'ya' && q.description?.trim())
@@ -333,7 +463,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
       picName: picName.trim() || userProfile.name,
       picRole: picRole.trim() || userProfile.role,
       picNip: picNip.trim() || userProfile.nip,
-      attachments,
+      attachments: hasAnyOtherModeEntry ? attachments : [],
       reporterSignature: reporterSignature || undefined,
     });
 
@@ -342,18 +472,23 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     }
 
     resetForm();
-    alert('Draft laporan berhasil disimpan! Seluruh jenjang, asrama, kategori, checklist, dan deskripsi akan dipulihkan saat draft dibuka.');
+    alert('Draft laporan berhasil disimpan! Seluruh jenjang, asrama, kategori, checklist, deskripsi, dan foto eviden akan dipulihkan saat draft dibuka.');
   };
 
   const resetForm = () => {
     setTitle('');
     setLocation('');
     setAttachments([]);
+    setModeBUploadNotice(null);
+    setIsModeBUploading(false);
+    setResolvedModeBUrls({});
     setReporterSignature('');
     setEditingDraftId(null);
+    setUploadSessionKey(createUploadSessionKey());
     setEntries([createEmptyJenjangEntry('')]);
     setTitleError('');
     setEntryErrors({});
+    setUploadingEntries({});
   };
 
   const loadDraftIntoForm = (draft: ReportItem) => {
@@ -703,6 +838,8 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
                   usedJenjangsByOthers={others}
                   errors={entryErrors[entry.id]}
                   hideTopJenjangSelector={idx === 0}
+                  uploadContextId={editingDraftId || uploadSessionKey}
+                  onUploadingChange={handleEntryUploadingChange}
                   onChange={(updated) => handleEntryChange(entry.id, updated)}
                   onRemove={() => handleRemoveEntry(entry.id)}
                 />
@@ -734,11 +871,12 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
             </div>
           </div>
 
-          {/* 4. UPLOAD LAMPIRAN */}
+          {/* 4. UPLOAD LAMPIRAN (HANYA MUNCUL JIKA ADA MODE B / LAPORAN KEJADIAN LAINNYA) */}
+          {hasAnyOtherModeEntry && (
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="block text-sm font-medium text-slate-700">
-                Lampiran Dokumen / Bukti Foto (Maksimal 2 Berkas)
+                Lampiran Dokumen / Bukti Foto Mode B (Opsional · Maksimal 2 Berkas)
               </label>
               <span
                 className={`text-[11px] font-semibold ${
@@ -752,56 +890,92 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
               ref={fileInputRef}
               type="file"
               multiple
-              disabled={attachments.length >= 2}
+              disabled={attachments.length >= 2 || isModeBUploading}
               accept="image/*,.pdf,.doc,.docx,.txt"
               className="hidden"
-              onChange={(e) => handleFiles(e.target.files)}
+              onChange={(e) => {
+                void handleFiles(e.target.files);
+                e.target.value = '';
+              }}
             />
             <div
               onClick={() => {
+                if (isModeBUploading) return;
                 if (attachments.length < 2) {
                   fileInputRef.current?.click();
                 } else {
-                  alert('Batas maksimal lampiran adalah 2 gambar. Hapus salah satu berkas terlebih dahulu.');
+                  setModeBUploadNotice(
+                    'Batas maksimal lampiran adalah 2 berkas. Hapus salah satu berkas terlebih dahulu.'
+                  );
                 }
               }}
               onDragOver={(e) => {
                 e.preventDefault();
-                if (attachments.length < 2) setIsDragOver(true);
+                if (attachments.length < 2 && !isModeBUploading) setIsDragOver(true);
               }}
               onDragLeave={() => setIsDragOver(false)}
               onDrop={(e) => {
                 e.preventDefault();
                 setIsDragOver(false);
-                if (attachments.length < 2) {
-                  handleFiles(e.dataTransfer.files);
+                if (attachments.length < 2 && !isModeBUploading) {
+                  void handleFiles(e.dataTransfer.files);
                 }
               }}
-              className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition ${
-                attachments.length >= 2
-                  ? 'border-slate-200 bg-slate-50 cursor-not-allowed opacity-80'
-                  : isDragOver
-                    ? 'border-indigo-500 bg-indigo-50/50'
-                    : 'border-slate-300 hover:border-indigo-500 bg-slate-50/60'
+              className={`border-2 border-dashed rounded-xl p-6 text-center transition ${
+                isModeBUploading
+                  ? 'border-amber-300 bg-amber-50/50 cursor-wait'
+                  : attachments.length >= 2
+                    ? 'border-slate-200 bg-slate-50 cursor-not-allowed opacity-80'
+                    : isDragOver
+                      ? 'border-indigo-500 bg-indigo-50/50 cursor-pointer'
+                      : 'border-slate-300 hover:border-indigo-500 bg-slate-50/60 cursor-pointer'
               }`}
             >
-              <UploadCloud className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-              <p className="text-sm font-medium text-slate-700">
-                {attachments.length >= 2 ? (
-                  <span className="text-amber-700 font-semibold">
-                    Batas maksimal 2 lampiran telah tercapai
-                  </span>
-                ) : (
-                  <>
-                    Tarik berkas ke sini, atau{' '}
-                    <span className="text-indigo-600 underline">pilih dari perangkat</span>
-                  </>
-                )}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Maksimal 2 gambar / berkas (Format JPG, PNG, PDF maks 10MB)
-              </p>
+              {isModeBUploading ? (
+                <>
+                  <Loader2 className="w-8 h-8 text-amber-600 animate-spin mx-auto mb-2" />
+                  <p className="text-sm font-medium text-amber-900">
+                    Mengompresi &amp; mengunggah berkas ke Supabase Storage...
+                  </p>
+                </>
+              ) : (
+                <>
+                  <UploadCloud className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-slate-700">
+                    {attachments.length >= 2 ? (
+                      <span className="text-amber-700 font-semibold">
+                        Batas maksimal 2 lampiran telah tercapai
+                      </span>
+                    ) : (
+                      <>
+                        Tarik berkas ke sini, atau{' '}
+                        <span className="text-indigo-600 underline">pilih dari perangkat</span>
+                      </>
+                    )}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Maksimal 2 berkas (Foto otomatis dikompresi ke JPEG; PDF/Dokumen maks. 10MB)
+                  </p>
+                </>
+              )}
             </div>
+
+            {modeBUploadNotice && (
+              <div className="mt-2.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                  <span>{modeBUploadNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModeBUploadNotice(null)}
+                  className="text-amber-700 hover:text-amber-950 p-0.5 shrink-0 cursor-pointer"
+                  aria-label="Tutup pemberitahuan"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {attachments.length > 0 && (
               <div className="mt-3 space-y-2">
@@ -809,19 +983,30 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
                   Berkas Terlampir ({attachments.length}):
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {attachments.map((file) => (
+                  {attachments.map((file) => {
+                    const resolvedUrl =
+                      (file.storagePath
+                        ? resolvedModeBUrls[file.storagePath] ||
+                          getStorageAttachmentPublicUrl(file.storagePath)
+                        : '') ||
+                      file.url ||
+                      file.dataUrl;
+                    const safePreviewSrc = isImageAttachmentFile(file)
+                      ? sanitizeImageUrl(resolvedUrl)
+                      : null;
+                    return (
                     <div
                       key={file.id}
                       className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-3 text-xs"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        {file.dataUrl ? (
+                        {safePreviewSrc ? (
                           <img
-                            src={file.dataUrl}
+                            src={safePreviewSrc}
                             alt={file.name}
                             className="w-8 h-8 rounded object-cover border border-slate-200 shrink-0"
                           />
-                        ) : file.type.includes('image') ? (
+                        ) : isImageAttachmentFile(file) ? (
                           <ImageIcon className="w-5 h-5 text-indigo-500 shrink-0" />
                         ) : (
                           <File className="w-5 h-5 text-slate-500 shrink-0" />
@@ -832,6 +1017,9 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
                           </p>
                           <p className="text-[11px] text-slate-400 font-mono tabular-nums">
                             {formatFileSize(file.size)}
+                            {file.originalSize && file.originalSize > file.size
+                              ? ` (dari ${formatFileSize(file.originalSize)})`
+                              : ''}
                           </p>
                         </div>
                       </div>
@@ -841,17 +1029,18 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
                           e.stopPropagation();
                           removeAttachment(file.id);
                         }}
-                        className="text-slate-400 hover:text-rose-600 p-1 rounded transition"
+                        className="text-slate-400 hover:text-rose-600 p-1 rounded transition cursor-pointer"
                         title="Hapus lampiran"
                       >
                         <X className="w-4 h-4" />
                       </button>
                     </div>
-                  ))}
+                  );})}
                 </div>
               </div>
             )}
           </div>
+          )}
 
           {/* 5. TANDA TANGAN PEMBUAT LAPORAN */}
           <SignaturePadInput
@@ -873,19 +1062,26 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
             <div className="flex items-center gap-3">
               <button
                 type="button"
+                disabled={isSubmitting || isAnyPhotoUploading}
                 onClick={handleSaveDraft}
-                className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium text-xs sm:text-sm transition flex items-center gap-2 cursor-pointer"
+                className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 font-medium text-xs sm:text-sm transition flex items-center gap-2 cursor-pointer"
               >
                 <Bookmark className="w-4 h-4 text-slate-500" />
                 <span>Simpan Draft</span>
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isSubmitting || isAnyPhotoUploading}
                 className="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs sm:text-sm transition shadow-xs flex items-center gap-2 disabled:opacity-50 cursor-pointer"
               >
                 <Send className="w-4 h-4" />
-                <span>{isSubmitting ? 'Mengirim...' : 'Kirim Laporan'}</span>
+                <span>
+                  {isAnyPhotoUploading
+                    ? 'Mengunggah Foto...'
+                    : isSubmitting
+                      ? 'Mengirim...'
+                      : 'Kirim Laporan'}
+                </span>
               </button>
             </div>
           </div>

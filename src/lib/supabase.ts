@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
+  AttachmentFile,
   NotificationItem,
   ReportItem,
   ReportStatus,
@@ -13,6 +14,8 @@ import {
   validateJenjangEntries,
   buildReportSummariesFromEntries,
   canDeleteReport,
+  isImageAttachmentFile,
+  MAX_CHECKLIST_EVIDENCE_PHOTOS,
 } from '../utils/formatters';
 
 export const EXPECTED_SUPABASE_PROJECT_REF = 'ghpxnwlqpgbglpjgxeus';
@@ -1523,39 +1526,223 @@ export const testSupabaseConnection = async (
   }
 };
 
-// Helper: Unggah file ke Supabase Storage (Bucket: report-attachments)
+export const REPORT_ATTACHMENTS_BUCKET = 'report-attachments';
+
+export interface UploadAttachmentResult {
+  confirmed: boolean;
+  storagePath: string;
+  url: string;
+  previewUrl?: string;
+  error?: string;
+}
+
+export function getStorageAttachmentPublicUrl(_storagePath?: string): string {
+  // Dinonaktifkan untuk kompatibilitas Supabase Private Storage:
+  // Foto dengan storagePath wajib menggunakan Signed URL (createSignedAttachmentUrl).
+  return '';
+}
+
+export async function createSignedAttachmentUrl(
+  storagePath: string,
+  expiresInSeconds = 900
+): Promise<string> {
+  const cleanedPath = String(storagePath || '').trim().replace(/^\/+/, '');
+  if (!cleanedPath) return '';
+
+  const client = getSupabaseClient();
+  if (!client) return '';
+
+  try {
+    const { data, error } = await client.storage
+      .from(REPORT_ATTACHMENTS_BUCKET)
+      .createSignedUrl(cleanedPath, expiresInSeconds);
+    if (error || !data?.signedUrl) {
+      return '';
+    }
+    return data.signedUrl;
+  } catch {
+    return '';
+  }
+}
+
+export async function resolveAttachmentDisplayUrls(
+  attachments: AttachmentFile[],
+  expiresInSeconds = 900
+): Promise<Record<string, string>> {
+  const uniquePaths = Array.from(
+    new Set(
+      (attachments || [])
+        .map((att) => String(att?.storagePath || '').trim())
+        .filter(Boolean)
+    )
+  );
+  if (uniquePaths.length === 0) return {};
+
+  const resolved: Record<string, string> = {};
+  await Promise.all(
+    uniquePaths.map(async (storagePath) => {
+      const signed = await createSignedAttachmentUrl(storagePath, expiresInSeconds);
+      if (signed) {
+        resolved[storagePath] = signed;
+      }
+    })
+  );
+  return resolved;
+}
+
+export function collectReportRequiredPhotoStoragePaths(
+  report: Pick<ReportItem, 'entries' | 'attachments'>
+): string[] {
+  const paths = new Set<string>();
+
+  if (Array.isArray(report?.attachments)) {
+    for (const att of report.attachments) {
+      const cleaned = String(att?.storagePath || '').trim();
+      if (cleaned && isImageAttachmentFile(att)) {
+        paths.add(cleaned);
+      }
+    }
+  }
+
+  if (Array.isArray(report?.entries)) {
+    for (const entry of report.entries) {
+      if (entry?.mode !== 'checklist' || !Array.isArray(entry?.checklistAnswers)) {
+        continue;
+      }
+      for (const ans of entry.checklistAnswers) {
+        if (ans?.answer !== 'ya' || !Array.isArray(ans?.attachments)) {
+          continue;
+        }
+        for (const att of ans.attachments.slice(0, MAX_CHECKLIST_EVIDENCE_PHOTOS)) {
+          const cleaned = String(att?.storagePath || '').trim();
+          if (cleaned && isImageAttachmentFile(att)) {
+            paths.add(cleaned);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(paths);
+}
+
+export interface ResolveReportStorageUrlsResult {
+  urls: Record<string, string>;
+  requiredPhotoPaths: string[];
+  failedPhotoPaths: string[];
+  allRequiredPhotosResolved: boolean;
+  resolvedAt: number;
+}
+
+export async function resolveReportStorageUrlsDetailed(
+  report: Pick<ReportItem, 'entries' | 'attachments'>,
+  expiresInSeconds = 900
+): Promise<ResolveReportStorageUrlsResult> {
+  const collected: AttachmentFile[] = [];
+  if (Array.isArray(report?.attachments)) {
+    collected.push(...report.attachments);
+  }
+  if (Array.isArray(report?.entries)) {
+    for (const entry of report.entries) {
+      if (Array.isArray(entry?.checklistAnswers)) {
+        for (const ans of entry.checklistAnswers) {
+          if (Array.isArray(ans?.attachments)) {
+            collected.push(...ans.attachments);
+          }
+        }
+      }
+    }
+  }
+
+  const urls = await resolveAttachmentDisplayUrls(collected, expiresInSeconds);
+  const requiredPhotoPaths = collectReportRequiredPhotoStoragePaths(report);
+  const failedPhotoPaths = requiredPhotoPaths.filter((path) => !urls[path]);
+
+  return {
+    urls,
+    requiredPhotoPaths,
+    failedPhotoPaths,
+    allRequiredPhotosResolved: failedPhotoPaths.length === 0,
+    resolvedAt: Date.now(),
+  };
+}
+
+export async function resolveReportStorageUrls(
+  report: Pick<ReportItem, 'entries' | 'attachments'>,
+  expiresInSeconds = 900
+): Promise<Record<string, string>> {
+  const result = await resolveReportStorageUrlsDetailed(report, expiresInSeconds);
+  return result.urls;
+}
+
+// Helper: Unggah file terkompresi ke Supabase Storage (Bucket: report-attachments)
 export async function uploadAttachmentToStorage(
   file: File,
   reportId: string
-): Promise<{ url: string; error?: string }> {
+): Promise<UploadAttachmentResult> {
   const client = getSupabaseClient();
   if (!client) {
-    return { url: '', error: 'Supabase belum terhubung atau belum dikonfigurasi.' };
+    return {
+      confirmed: false,
+      storagePath: '',
+      url: '',
+      error: 'Supabase belum terhubung atau belum dikonfigurasi.',
+    };
   }
 
   try {
-    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const filePath = `reports/${reportId}/${Date.now()}_${cleanFileName}`;
-
-    const { error: uploadError } = await client.storage
-      .from('report-attachments')
-      .upload(filePath, file, {
-        cacheControl: '3600',
-        upsert: true,
-      });
-
-    if (uploadError) {
-      console.warn('Gagal upload ke Supabase Storage, menggunakan base64:', uploadError.message);
-      return { url: '', error: uploadError.message };
+    if (typeof client.auth?.getSession === 'function') {
+      const { data: sessionData, error: sessionErr } = await client.auth.getSession();
+      if (sessionErr || !sessionData?.session?.access_token) {
+        return {
+          confirmed: false,
+          storagePath: '',
+          url: '',
+          error: 'Sesi autentikasi Supabase tidak aktif. Silakan login ulang.',
+        };
+      }
     }
 
-    const { data: publicUrlData } = client.storage
-      .from('report-attachments')
-      .getPublicUrl(filePath);
+    const cleanFolder = String(reportId || 'pending')
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .slice(0, 64);
+    const cleanFileName = String(file.name || 'eviden.jpg')
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .slice(0, 80);
+    const uniqueSuffix = Math.random().toString(36).substring(2, 8);
+    const filePath = `reports/${cleanFolder}/${Date.now()}_${uniqueSuffix}_${cleanFileName}`;
 
-    return { url: publicUrlData.publicUrl };
+    const { data: uploadData, error: uploadError } = await client.storage
+      .from(REPORT_ATTACHMENTS_BUCKET)
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        contentType: file.type || 'image/jpeg',
+        upsert: false,
+      });
+
+    if (uploadError || !uploadData?.path) {
+      const reason =
+        uploadError?.message || 'Supabase Storage tidak mengonfirmasi keberhasilan upload file.';
+      console.warn('Gagal upload ke Supabase Storage:', reason);
+      return { confirmed: false, storagePath: '', url: '', error: reason };
+    }
+
+    const confirmedPath = String(uploadData.path);
+    const signedUrl = await createSignedAttachmentUrl(confirmedPath, 3600);
+
+    return {
+      confirmed: true,
+      storagePath: confirmedPath,
+      url: signedUrl,
+      previewUrl: signedUrl,
+    };
   } catch (err: any) {
-    return { url: '', error: err.message || 'Error saat upload file' };
+    return {
+      confirmed: false,
+      storagePath: '',
+      url: '',
+      error: err?.message || 'Error saat upload file ke Supabase Storage',
+    };
   }
 }
 

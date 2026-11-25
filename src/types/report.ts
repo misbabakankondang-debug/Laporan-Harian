@@ -38,12 +38,14 @@ export interface ChecklistItemResponse {
   question: string;
   answer: ChecklistAnswer | '';
   description?: string; // Deskripsi kondisi khusus jika answer === 'ya'
+  attachments?: AttachmentFile[]; // Maksimal 2 foto eviden terkompresi jika answer === 'ya'
 }
 
 export interface ReportJenjangEntry {
   id: string;
   jenjang: JenjangType | '';
-  dormitoryType: DormitoryType | '';
+  dormitoryType: string; // Ringkasan label kompatibel ("Asrama Putera", "Asrama Puteri", atau "Asrama Putera & Asrama Puteri")
+  dormitoryTypes?: DormitoryType[]; // Pilihan multi-select resmi
   category: ReportCategory | '';
   customCategory?: string; // Wajib jika category === 'lainnya_manual'
   priority: ReportPriority;
@@ -150,8 +152,10 @@ export interface AttachmentFile {
   name: string;
   size: number; // in bytes
   type: string;
+  url?: string;
   dataUrl?: string;
   storagePath?: string;
+  originalSize?: number;
 }
 
 export interface ReportLog {

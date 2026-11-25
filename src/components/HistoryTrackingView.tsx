@@ -16,6 +16,7 @@ import {
   statusLabels, 
   formatDateOnly, 
   formatReportTicketNumber,
+  formatDormitoryTypesLabel,
   NEW_CATEGORY_OPTIONS,
   LEGACY_CATEGORY_OPTIONS,
   getCategoryDisplayLabel,
@@ -130,7 +131,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
       const jenjangText = getReportJenjangBadgeList(r).join(', ') || r.jenjang || '-';
       const entriesText = Array.isArray(r.entries) && r.entries.length > 0
         ? r.entries
-            .map((e) => `${e.jenjang} (${e.dormitoryType}): ${getCategoryDisplayLabel(e.category, e.customCategory)} [${priorityLabels[e.priority]?.label || e.priority}]`)
+            .map((e) => `${e.jenjang} (${formatDormitoryTypesLabel(e.dormitoryTypes, e.dormitoryType) || '-'}): ${getCategoryDisplayLabel(e.category, e.customCategory)} [${priorityLabels[e.priority]?.label || e.priority}]`)
             .join(' | ')
         : getCategoryDisplayLabel(r.category, r.customCategory);
 
@@ -398,7 +399,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                           <div className="space-y-0.5 mt-1">
                             {entries.map((ent) => (
                               <p key={ent.id} className="text-[11px] text-slate-600 truncate">
-                                <strong className="text-emerald-800">{ent.jenjang}</strong> · {ent.dormitoryType || '-'} · {getCategoryDisplayLabel(ent.category, ent.customCategory)}
+                                <strong className="text-emerald-800">{ent.jenjang}</strong> · {formatDormitoryTypesLabel(ent.dormitoryTypes, ent.dormitoryType) || '-'} · {getCategoryDisplayLabel(ent.category, ent.customCategory)}
                               </p>
                             ))}
                           </div>
