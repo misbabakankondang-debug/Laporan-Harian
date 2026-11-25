@@ -51,7 +51,25 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
   // State khusus laporan baru terstruktur (1 atau beberapa entri jenjang)
   const [entries, setEntries] = useState<ReportJenjangEntry[]>(() =>
     hasStructuredEntries
-      ? report.entries!.map((e, idx) => normalizeJenjangEntry(e, idx))
+      ? report.entries!.map((e, idx) => {
+          const normalized = normalizeJenjangEntry(e, idx);
+          if (normalized.mode === 'checklist' && normalized.incidentDescription?.trim()) {
+            const yesItems = (normalized.checklistAnswers || []).filter((q) => q.answer === 'ya');
+            const hasPerQDesc = yesItems.some((q) => Boolean(q.description?.trim()));
+            if (yesItems.length === 1 && !hasPerQDesc) {
+              const targetIdx = yesItems[0].questionIndex;
+              return {
+                ...normalized,
+                checklistAnswers: (normalized.checklistAnswers || []).map((q) =>
+                  q.questionIndex === targetIdx
+                    ? { ...q, description: normalized.incidentDescription?.trim() || '' }
+                    : q
+                ),
+              };
+            }
+          }
+          return normalized;
+        })
       : []
   );
   const [entryErrors, setEntryErrors] = useState<Record<string, EntryValidationErrors>>({});

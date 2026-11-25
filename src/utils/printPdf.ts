@@ -232,52 +232,79 @@ export function buildPrintReportHtml(
           const entryCatLabel = getCategoryDisplayLabel(entry.category, entry.customCategory);
           const entryYes = entryHasYesFindings(entry);
 
+          const checklistRows =
+            entry.mode === 'checklist' ? normalizeChecklistAnswers(entry.checklistAnswers) : [];
+          const hasPerQuestionDescriptions = checklistRows.some(
+            (r) => r.answer === 'ya' && Boolean(String(r.description || '').trim())
+          );
+
           const checklistSectionHtml =
             entry.mode === 'checklist'
               ? `
-                <table class="checklist-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 32px; text-align: center;">No</th>
-                      <th>Pertanyaan Checklist Kondisi Sekolah / Asrama</th>
-                      <th style="width: 72px; text-align: center;">Jawaban</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${normalizeChecklistAnswers(entry.checklistAnswers)
-                      .map((row) => {
-                        const isYes = row.answer === 'ya';
-                        const badgeClass = isYes
-                          ? 'badge-ya'
-                          : row.answer === 'tidak'
-                          ? 'badge-tidak'
-                          : 'badge-empty';
-                        const ansText = isYes ? 'Ya' : row.answer === 'tidak' ? 'Tidak' : '-';
-                        return `
-                          <tr class="${isYes ? 'row-ya' : ''}">
-                            <td style="text-align: center; font-family: monospace;">${row.questionIndex}</td>
-                            <td class="justify-prose">${escapeHtml(row.question)}</td>
-                            <td style="text-align: center;"><span class="${badgeClass}">${ansText}</span></td>
-                          </tr>
-                        `;
-                      })
-                      .join('')}
-                  </tbody>
-                </table>
-                <div class="desc-box ${entryYes ? 'desc-box-alert' : ''}">
-                  <div class="desc-header">
-                    ${
-                      entryYes
-                        ? `Deskripsi Kejadian — Jenjang ${escapeHtml(entry.jenjang || '-')} (Tindak Lanjut Temuan Ya)`
-                        : `Keterangan Hasil Checklist — Jenjang ${escapeHtml(entry.jenjang || '-')}`
-                    }
+                <div class="checklist-box">
+                  <div class="checklist-box-header">
+                    CHECKLIST KONDISI SEKOLAH / ASRAMA &mdash; JENJANG ${escapeHtml(entry.jenjang || '-')}
                   </div>
-                  <div class="desc-content justify-prose">${
-                    entryYes
-                      ? escapeHtml(entry.incidentDescription || '-')
-                      : 'Seluruh kondisi yang diperiksa dalam checklist dinyatakan Tidak ditemukan.'
-                  }</div>
+                  ${checklistRows
+                    .map((row) => {
+                      const isYes = row.answer === 'ya';
+                      const rowDesc = String(row.description || '').trim();
+                      const badgeClass = isYes
+                        ? 'badge-ya'
+                        : row.answer === 'tidak'
+                        ? 'badge-tidak'
+                        : 'badge-empty';
+                      const ansText = isYes ? 'YA' : row.answer === 'tidak' ? 'TIDAK' : '-';
+                      return `
+                        <div class="checklist-item ${isYes ? 'checklist-item-ya' : ''}">
+                          <div class="checklist-item-top">
+                            <div class="checklist-item-question justify-prose">
+                              <span style="font-family: monospace; font-weight: bold; color: #475569;">${row.questionIndex}.</span>
+                              <strong>Pertanyaan:</strong> ${escapeHtml(row.question)}
+                            </div>
+                            <div class="checklist-item-answer">
+                              <span style="color: #475569;">Jawaban:</span>
+                              <span class="${badgeClass}">${ansText}</span>
+                            </div>
+                          </div>
+                          ${
+                            isYes && rowDesc
+                              ? `
+                            <div class="checklist-item-desc">
+                              <div class="checklist-item-desc-label">Deskripsi kondisi:</div>
+                              <div class="checklist-item-desc-text justify-prose">${escapeHtml(rowDesc)}</div>
+                            </div>
+                          `
+                              : ''
+                          }
+                        </div>
+                      `;
+                    })
+                    .join('')}
                 </div>
+                ${
+                  entryYes &&
+                  !hasPerQuestionDescriptions &&
+                  Boolean(String(entry.incidentDescription || '').trim())
+                    ? `
+                  <div class="desc-box desc-box-alert">
+                    <div class="desc-header">
+                      Deskripsi Kejadian &mdash; Jenjang ${escapeHtml(entry.jenjang || '-')} (Catatan Laporan Sebelum Pembaruan Per-Pertanyaan)
+                    </div>
+                    <div class="desc-content justify-prose">${escapeHtml(entry.incidentDescription || '-')}</div>
+                  </div>
+                `
+                    : !entryYes
+                      ? `
+                  <div class="desc-box">
+                    <div class="desc-header">
+                      Keterangan Hasil Checklist &mdash; Jenjang ${escapeHtml(entry.jenjang || '-')}
+                    </div>
+                    <div class="desc-content justify-prose">Seluruh kondisi yang diperiksa dalam checklist dinyatakan Tidak ditemukan.</div>
+                  </div>
+                `
+                      : ''
+                }
               `
               : `
                 <div class="desc-box">
@@ -550,6 +577,72 @@ export function buildPrintReportHtml(
     .badge-empty {
       color: #64748b;
       font-size: 8pt;
+    }
+    .checklist-box {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-top: 6px;
+      background-color: #ffffff;
+    }
+    .checklist-box-header {
+      background-color: #f8fafc;
+      border-bottom: 1px solid #cbd5e1;
+      padding: 6px 10px;
+      font-size: 8.5pt;
+      font-weight: bold;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .checklist-item {
+      padding: 7px 10px;
+      border-bottom: 1px solid #e2e8f0;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .checklist-item:last-child {
+      border-bottom: none;
+    }
+    .checklist-item-ya {
+      background-color: #fffbeb;
+    }
+    .checklist-item-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 8.5pt;
+      line-height: 1.45;
+      color: #0f172a;
+    }
+    .checklist-item-question {
+      flex: 1;
+    }
+    .checklist-item-answer {
+      flex-shrink: 0;
+      white-space: nowrap;
+      font-size: 8pt;
+    }
+    .checklist-item-desc {
+      margin-top: 6px;
+      margin-left: 16px;
+      padding: 6px 9px;
+      background-color: #ffffff;
+      border: 1px solid #fcd34d;
+      border-radius: 4px;
+    }
+    .checklist-item-desc-label {
+      font-size: 8pt;
+      font-weight: bold;
+      color: #78350f;
+      margin-bottom: 2px;
+    }
+    .checklist-item-desc-text {
+      font-size: 8.8pt;
+      color: #1e293b;
+      white-space: pre-wrap;
+      line-height: 1.45;
     }
     .alert-yes-box {
       margin-top: 8px;

@@ -282,7 +282,9 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         Boolean(e.category) ||
         Boolean(e.customCategory?.trim()) ||
         Boolean(e.incidentDescription?.trim()) ||
-        (e.checklistAnswers || []).some((q) => q.answer === 'ya' || q.answer === 'tidak')
+        (e.checklistAnswers || []).some(
+          (q) => q.answer === 'ya' || q.answer === 'tidak' || Boolean(q.description?.trim())
+        )
     );
 
     if (!title.trim() && !hasAnyEntryInput) {
@@ -301,6 +303,13 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
       preservedEntries
         .map((e) => {
           const head = `[${e.jenjang || 'Jenjang belum dipilih'} · ${e.dormitoryType || 'Asrama belum dipilih'}]`;
+          if (e.mode === 'checklist') {
+            const yesWithDesc = (e.checklistAnswers || [])
+              .filter((q) => q.answer === 'ya' && q.description?.trim())
+              .map((q) => `No.${q.questionIndex}: ${q.description?.trim()}`)
+              .join('; ');
+            if (yesWithDesc) return `${head} ${yesWithDesc}`;
+          }
           return e.incidentDescription?.trim() ? `${head} ${e.incidentDescription.trim()}` : head;
         })
         .join('\n') || 'Draft laporan SIBAHAR';
@@ -358,7 +367,27 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     setEntryErrors({});
 
     if (Array.isArray(draft.entries) && draft.entries.length > 0) {
-      setEntries(draft.entries.map((entry, idx) => normalizeJenjangEntry(entry, idx)));
+      setEntries(
+        draft.entries.map((entry, idx) => {
+          const normalized = normalizeJenjangEntry(entry, idx);
+          if (normalized.mode === 'checklist' && normalized.incidentDescription?.trim()) {
+            const yesItems = (normalized.checklistAnswers || []).filter((q) => q.answer === 'ya');
+            const hasPerQDesc = yesItems.some((q) => Boolean(q.description?.trim()));
+            if (yesItems.length === 1 && !hasPerQDesc) {
+              const targetIdx = yesItems[0].questionIndex;
+              return {
+                ...normalized,
+                checklistAnswers: (normalized.checklistAnswers || []).map((q) =>
+                  q.questionIndex === targetIdx
+                    ? { ...q, description: normalized.incidentDescription?.trim() || '' }
+                    : q
+                ),
+              };
+            }
+          }
+          return normalized;
+        })
+      );
     } else {
       // Kompatibilitas draft format lama sebelum ada kolom entries
       const fallbackEntry = createEmptyJenjangEntry(

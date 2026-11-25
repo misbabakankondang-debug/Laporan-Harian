@@ -306,6 +306,7 @@ export function createDefaultChecklistAnswers(): ChecklistItemResponse[] {
     questionIndex: idx + 1,
     question,
     answer: '',
+    description: '',
   }));
 }
 
@@ -317,10 +318,12 @@ export function normalizeChecklistAnswers(
     rawAnswers.forEach((item, idx) => {
       const qIndex = Number(item?.questionIndex) || idx + 1;
       const ans = item?.answer === 'ya' || item?.answer === 'tidak' ? item.answer : '';
+      const rawDesc = typeof item?.description === 'string' ? item.description : '';
       byIndex.set(qIndex, {
         questionIndex: qIndex,
         question: CHECKLIST_QUESTIONS[qIndex - 1] || item?.question || `Pertanyaan ${qIndex}`,
         answer: ans,
+        description: ans === 'tidak' ? '' : rawDesc,
       });
     });
   }
@@ -333,6 +336,7 @@ export function normalizeChecklistAnswers(
         questionIndex: qIndex,
         question,
         answer: '',
+        description: '',
       }
     );
   });
@@ -408,7 +412,10 @@ export interface EntryValidationErrors {
   category?: string;
   customCategory?: string;
   checklist?: string;
+  checklistDescriptions?: string;
   unansweredIndices?: number[];
+  missingYesDescriptionIndices?: number[];
+  yesDescriptionErrors?: Record<number, string>;
   incidentDescription?: string;
 }
 
@@ -468,11 +475,21 @@ export function validateJenjangEntries(entries: ReportJenjangEntry[]): {
         if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.checklist}`;
       }
 
-      const hasYes = normalizedAnswers.some((item) => item.answer === 'ya');
-      if (hasYes && !String(entry.incidentDescription || '').trim()) {
-        errs.incidentDescription =
-          'Deskripsi kejadian wajib diisi karena terdapat minimal satu jawaban "Ya" pada checklist.';
-        if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.incidentDescription}`;
+      const missingYesDescriptionIndices: number[] = [];
+      const yesDescriptionErrors: Record<number, string> = {};
+      normalizedAnswers.forEach((item) => {
+        if (item.answer === 'ya' && !String(item.description || '').trim()) {
+          missingYesDescriptionIndices.push(item.questionIndex);
+          yesDescriptionErrors[item.questionIndex] =
+            'Deskripsi kondisi wajib diisi karena jawaban pertanyaan ini adalah Ya.';
+        }
+      });
+
+      if (missingYesDescriptionIndices.length > 0) {
+        errs.missingYesDescriptionIndices = missingYesDescriptionIndices;
+        errs.yesDescriptionErrors = yesDescriptionErrors;
+        errs.checklistDescriptions = `Deskripsi kondisi wajib diisi untuk pertanyaan jawaban "Ya" nomor: ${missingYesDescriptionIndices.join(', ')}.`;
+        if (!firstErrorMessage) firstErrorMessage = `${label}: ${errs.checklistDescriptions}`;
       }
     } else {
       if (!String(entry.incidentDescription || '').trim()) {
@@ -514,11 +531,26 @@ export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): 
   const normalizedEntries = entries.map((entry, idx) => {
     const normalized = normalizeJenjangEntry(entry, idx);
     if (normalized.mode === 'checklist') {
-      const hasYes = entryHasYesFindings(normalized);
+      const cleanedAnswers = (normalized.checklistAnswers || []).map((item) => ({
+        ...item,
+        description: item.answer === 'ya' ? String(item.description || '').trim() : '',
+      }));
+      const yesItems = cleanedAnswers.filter((item) => item.answer === 'ya');
+      const hasYes = yesItems.length > 0;
+      const perQuestionSummary = hasYes
+        ? yesItems
+            .map(
+              (item) =>
+                `No.${item.questionIndex} (${item.question}):\n${item.description || '-'}`
+            )
+            .join('\n\n')
+        : '';
+
       return {
         ...normalized,
+        checklistAnswers: cleanedAnswers,
         hasYesAnswer: hasYes,
-        incidentDescription: hasYes ? String(normalized.incidentDescription || '').trim() : '',
+        incidentDescription: perQuestionSummary,
       };
     }
     return {
@@ -559,7 +591,13 @@ export function buildReportSummariesFromEntries(entries: ReportJenjangEntry[]): 
         return `${header}\nChecklist Kondisi Sekolah/Asrama: Seluruh kondisi yang diperiksa dalam checklist dinyatakan Tidak ditemukan.`;
       }
       const yesNums = yesItems.map((q) => `No.${q.questionIndex}`).join(', ');
-      return `${header}\nChecklist Kondisi Sekolah/Asrama (${yesItems.length} temuan Ya: ${yesNums}):\n${entry.incidentDescription || '-'}`;
+      const perQuestionDetails = yesItems
+        .map(
+          (q) =>
+            `${q.questionIndex}. ${q.question}\n   Jawaban: YA\n   Deskripsi kondisi: ${q.description || '-'}`
+        )
+        .join('\n');
+      return `${header}\nChecklist Kondisi Sekolah/Asrama (${yesItems.length} temuan Ya: ${yesNums}):\n${perQuestionDetails}`;
     }
 
     return `${header}\nLaporan Kejadian Lainnya:\n${entry.incidentDescription || '-'}`;
@@ -653,6 +691,12 @@ export function reportMatchesSearchQuery(report: ReportItem, query: string): boo
       }
       if ((entry.customCategory || '').toLowerCase().includes(q)) return true;
       if ((entry.incidentDescription || '').toLowerCase().includes(q)) return true;
+      if (
+        Array.isArray(entry.checklistAnswers) &&
+        entry.checklistAnswers.some((ans) => (ans.description || '').toLowerCase().includes(q))
+      ) {
+        return true;
+      }
       if (priorityLabels[entry.priority]?.label.toLowerCase().includes(q)) return true;
     }
   }

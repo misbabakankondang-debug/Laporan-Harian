@@ -508,62 +508,102 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
 
                       {entry.mode === 'checklist' ? (
                         <div className="space-y-3">
-                          <div className="border border-slate-200 rounded-lg overflow-hidden">
-                            <table className="w-full text-left border-collapse text-xs">
-                              <thead>
-                                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600">
-                                  <th className="py-2 px-2.5 w-10 text-center">No</th>
-                                  <th className="py-2 px-2.5">Pertanyaan Pemeriksaan Kondisi</th>
-                                  <th className="py-2 px-2.5 w-20 text-center">Jawaban</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {checklistRows.map((row) => {
-                                  const isYes = row.answer === 'ya';
-                                  return (
-                                    <tr key={row.questionIndex} className={isYes ? 'bg-amber-50/60' : ''}>
-                                      <td className="py-2 px-2.5 text-center font-mono text-slate-500 align-top">
-                                        {row.questionIndex}
-                                      </td>
-                                      <td className="py-2 px-2.5 text-slate-800 leading-relaxed align-top">
-                                        {row.question}
-                                      </td>
-                                      <td className="py-2 px-2.5 text-center align-top">
-                                        <span
-                                          className={`inline-block px-2 py-0.5 rounded font-bold text-[11px] ${
-                                            isYes
-                                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                                              : row.answer === 'tidak'
-                                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                              : 'bg-slate-100 text-slate-500'
+                          {(() => {
+                            const hasPerQuestionDescriptions = checklistRows.some(
+                              (r) =>
+                                r.answer === 'ya' && Boolean(String(r.description || '').trim())
+                            );
+                            return (
+                              <>
+                                <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                                  <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                                    <h5 className="text-[11px] font-bold text-slate-900 uppercase tracking-wider">
+                                      CHECKLIST KONDISI SEKOLAH / ASRAMA
+                                    </h5>
+                                    <span className="text-[11px] font-mono text-slate-500">
+                                      {checklistRows.length} Pertanyaan
+                                    </span>
+                                  </div>
+                                  <div className="divide-y divide-slate-100">
+                                    {checklistRows.map((row) => {
+                                      const isYes = row.answer === 'ya';
+                                      const rowDesc = String(row.description || '').trim();
+                                      return (
+                                        <div
+                                          key={row.questionIndex}
+                                          className={`p-3 space-y-2 ${
+                                            isYes ? 'bg-amber-50/50' : ''
                                           }`}
                                         >
-                                          {isYes ? 'Ya' : row.answer === 'tidak' ? 'Tidak' : '-'}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
+                                          <div className="flex items-start justify-between gap-3">
+                                            <p className="text-xs text-slate-800 leading-relaxed flex-1">
+                                              <span className="font-mono font-bold text-slate-600 mr-1.5">
+                                                {row.questionIndex}.
+                                              </span>
+                                              <span className="font-semibold text-slate-700">
+                                                Pertanyaan:{' '}
+                                              </span>
+                                              <span>{row.question}</span>
+                                            </p>
+                                            <div className="shrink-0 flex items-center gap-1.5 text-[11px]">
+                                              <span className="text-slate-500 font-medium">
+                                                Jawaban:
+                                              </span>
+                                              <span
+                                                className={`inline-block px-2 py-0.5 rounded font-bold ${
+                                                  isYes
+                                                    ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                                    : row.answer === 'tidak'
+                                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                                      : 'bg-slate-100 text-slate-500'
+                                                }`}
+                                              >
+                                                {isYes
+                                                  ? 'YA'
+                                                  : row.answer === 'tidak'
+                                                    ? 'TIDAK'
+                                                    : '-'}
+                                              </span>
+                                            </div>
+                                          </div>
 
-                          <div className="space-y-1.5">
-                            <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                              {entryYes ? 'Deskripsi Kejadian (Tindak Lanjut Jawaban Ya)' : 'Keterangan Checklist'}
-                            </p>
-                            <div
-                              className={`p-3.5 rounded-lg border text-xs sm:text-sm leading-relaxed text-justify whitespace-pre-wrap ${
-                                entryYes
-                                  ? 'bg-amber-50/40 border-amber-200 text-slate-900'
-                                  : 'bg-slate-50 border-slate-200 text-slate-700'
-                              }`}
-                            >
-                              {entryYes
-                                ? entry.incidentDescription || '-'
-                                : 'Seluruh kondisi yang diperiksa dalam checklist dinyatakan Tidak ditemukan.'}
-                            </div>
-                          </div>
+                                          {isYes && rowDesc && (
+                                            <div className="ml-0 sm:ml-5 p-2.5 rounded-lg bg-white border border-amber-200 space-y-1">
+                                              <p className="text-[11px] font-bold text-amber-950">
+                                                Deskripsi kondisi:
+                                              </p>
+                                              <p className="text-xs sm:text-sm text-slate-800 whitespace-pre-wrap leading-relaxed text-justify">
+                                                {rowDesc}
+                                              </p>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+
+                                {entryYes &&
+                                  !hasPerQuestionDescriptions &&
+                                  Boolean(String(entry.incidentDescription || '').trim()) && (
+                                    <div className="space-y-1.5">
+                                      <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                                        Deskripsi Kejadian (Catatan Laporan Sebelum Pembaruan Per-Pertanyaan)
+                                      </p>
+                                      <div className="p-3.5 rounded-lg border bg-amber-50/40 border-amber-200 text-slate-900 text-xs sm:text-sm leading-relaxed text-justify whitespace-pre-wrap">
+                                        {entry.incidentDescription}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                {!entryYes && (
+                                  <div className="p-3 rounded-lg border bg-slate-50 border-slate-200 text-slate-700 text-xs leading-relaxed">
+                                    Seluruh kondisi yang diperiksa dalam checklist dinyatakan Tidak ditemukan.
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       ) : (
                         <div className="space-y-1.5">

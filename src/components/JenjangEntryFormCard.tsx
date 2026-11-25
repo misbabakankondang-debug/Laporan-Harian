@@ -67,13 +67,30 @@ export const JenjangEntryFormCard: React.FC<JenjangEntryFormCardProps> = ({
 
   const handleAnswerChange = (questionIndex: number, answer: ChecklistAnswer) => {
     const nextAnswers = checklistAnswers.map((item) =>
-      item.questionIndex === questionIndex ? { ...item, answer } : item
+      item.questionIndex === questionIndex
+        ? {
+            ...item,
+            answer,
+            description: answer === 'tidak' ? '' : item.description || '',
+          }
+        : item
     );
     const nextHasYes = nextAnswers.some((item) => item.answer === 'ya');
     onChange({
       ...entry,
       checklistAnswers: nextAnswers,
       hasYesAnswer: nextHasYes,
+    });
+  };
+
+  const handleChecklistDescriptionChange = (questionIndex: number, description: string) => {
+    const nextAnswers = checklistAnswers.map((item) =>
+      item.questionIndex === questionIndex ? { ...item, description } : item
+    );
+    onChange({
+      ...entry,
+      checklistAnswers: nextAnswers,
+      hasYesAnswer: nextAnswers.some((item) => item.answer === 'ya'),
     });
   };
 
@@ -96,6 +113,8 @@ export const JenjangEntryFormCard: React.FC<JenjangEntryFormCardProps> = ({
         errors.category ||
         errors.customCategory ||
         errors.checklist ||
+        errors.checklistDescriptions ||
+        (errors.missingYesDescriptionIndices && errors.missingYesDescriptionIndices.length > 0) ||
         errors.incidentDescription)
   );
 
@@ -380,47 +399,110 @@ export const JenjangEntryFormCard: React.FC<JenjangEntryFormCardProps> = ({
               </div>
             )}
 
+            {errors?.checklistDescriptions && (
+              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{errors.checklistDescriptions}</span>
+              </div>
+            )}
+
+            {hasYes &&
+              !checklistAnswers.some(
+                (q) => q.answer === 'ya' && Boolean(String(q.description || '').trim())
+              ) &&
+              Boolean(String(entry.incidentDescription || '').trim()) && (
+                <div className="p-3 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-900 space-y-1">
+                  <p className="font-bold">Catatan Deskripsi Laporan Lama (Referensi):</p>
+                  <p className="text-sky-800 whitespace-pre-wrap leading-relaxed">
+                    {entry.incidentDescription}
+                  </p>
+                  <p className="text-[11px] text-sky-700">
+                    Silakan salin atau lengkapi deskripsi di atas ke masing-masing pertanyaan yang dijawab Ya.
+                  </p>
+                </div>
+              )}
+
             <div className="divide-y divide-slate-100">
               {checklistAnswers.map((item) => {
                 const isUnanswered = errors?.unansweredIndices?.includes(item.questionIndex);
+                const yesDescError = errors?.yesDescriptionErrors?.[item.questionIndex];
+                const isYes = item.answer === 'ya';
                 return (
                   <div
                     key={item.questionIndex}
-                    className={`py-2.5 px-2 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
-                      isUnanswered ? 'bg-rose-50/70 border border-rose-200 my-1' : ''
+                    className={`py-3 px-2.5 rounded-lg space-y-2.5 ${
+                      isUnanswered || yesDescError
+                        ? 'bg-rose-50/70 border border-rose-200 my-1'
+                        : isYes
+                          ? 'bg-amber-50/40 my-1'
+                          : ''
                     }`}
                   >
-                    <div className="flex items-start gap-2 text-xs text-slate-800 leading-relaxed flex-1">
-                      <span className="font-mono font-bold text-slate-500 shrink-0 w-5">
-                        {item.questionIndex}.
-                      </span>
-                      <span>{item.question}</span>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                      <div className="flex items-start gap-2 text-xs text-slate-800 leading-relaxed flex-1">
+                        <span className="font-mono font-bold text-slate-500 shrink-0 w-5">
+                          {item.questionIndex}.
+                        </span>
+                        <span>{item.question}</span>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => handleAnswerChange(item.questionIndex, 'ya')}
+                          className={`px-3.5 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                            isYes
+                              ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
+                              : 'bg-white text-slate-700 border-slate-300 hover:border-amber-400'
+                          }`}
+                        >
+                          Ya
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAnswerChange(item.questionIndex, 'tidak')}
+                          className={`px-3.5 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                            item.answer === 'tidak'
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                              : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-400'
+                          }`}
+                        >
+                          Tidak
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                      <button
-                        type="button"
-                        onClick={() => handleAnswerChange(item.questionIndex, 'ya')}
-                        className={`px-3.5 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ${
-                          item.answer === 'ya'
-                            ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
-                            : 'bg-white text-slate-700 border-slate-300 hover:border-amber-400'
-                        }`}
-                      >
-                        Ya
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleAnswerChange(item.questionIndex, 'tidak')}
-                        className={`px-3.5 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ${
-                          item.answer === 'tidak'
-                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
-                            : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-400'
-                        }`}
-                      >
-                        Tidak
-                      </button>
-                    </div>
+                    {isYes && (
+                      <div className="pl-0 sm:pl-7 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="block text-xs font-semibold text-amber-950">
+                            Deskripsikan kondisi yang terjadi: <span className="text-rose-500">*</span>
+                          </label>
+                          <span className="text-[11px] text-slate-400 font-mono tabular-nums">
+                            {(item.description || '').length} karakter
+                          </span>
+                        </div>
+                        <textarea
+                          rows={3}
+                          value={item.description || ''}
+                          onChange={(e) =>
+                            handleChecklistDescriptionChange(item.questionIndex, e.target.value)
+                          }
+                          placeholder={`Jelaskan kondisi yang terjadi untuk pertanyaan No. ${item.questionIndex}...`}
+                          className={`w-full px-3 py-2 rounded-lg border text-xs sm:text-sm bg-white transition focus:outline-hidden ${
+                            yesDescError
+                              ? 'border-rose-400 focus:ring-2 focus:ring-rose-500/20'
+                              : 'border-amber-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20'
+                          }`}
+                        />
+                        {yesDescError && (
+                          <p className="text-xs text-rose-600 flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{yesDescError}</span>
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -428,7 +510,7 @@ export const JenjangEntryFormCard: React.FC<JenjangEntryFormCardProps> = ({
 
             {/* Indikator kondisi Ya vs Semua Tidak */}
             {hasYes ? (
-              <div className="pt-2 space-y-2">
+              <div className="pt-1">
                 <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                   <div>
@@ -436,37 +518,9 @@ export const JenjangEntryFormCard: React.FC<JenjangEntryFormCardProps> = ({
                       Terdapat {yesCount} jawaban &ldquo;Ya&rdquo; yang memerlukan perhatian pimpinan
                     </p>
                     <p className="text-[11px] text-amber-800 mt-0.5">
-                      Wajib menuliskan Deskripsi Kejadian yang menjelaskan kondisi sesuai jawaban Ya di atas.
+                      Pastikan kolom &ldquo;Deskripsikan kondisi yang terjadi&rdquo; pada masing-masing pertanyaan bertanda Ya di atas telah diisi dengan jelas.
                     </p>
                   </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs sm:text-sm font-medium text-slate-700">
-                      Deskripsi Kejadian ({entry.jenjang || 'Jenjang'}) <span className="text-rose-500">*</span>
-                    </label>
-                    <span className="text-[11px] text-slate-400 font-mono tabular-nums">
-                      {(entry.incidentDescription || '').length} karakter
-                    </span>
-                  </div>
-                  <textarea
-                    rows={3}
-                    value={entry.incidentDescription || ''}
-                    onChange={(e) => handleFieldChange('incidentDescription', e.target.value)}
-                    placeholder="Jelaskan secara rinci kejadian yang berkaitan dengan jawaban Ya pada checklist..."
-                    className={`w-full px-3.5 py-2.5 rounded-lg border text-xs sm:text-sm transition focus:outline-hidden ${
-                      errors?.incidentDescription
-                        ? 'border-rose-400 focus:ring-2 focus:ring-rose-500/20 bg-rose-50/20'
-                        : 'border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20'
-                    }`}
-                  />
-                  {errors?.incidentDescription && (
-                    <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.incidentDescription}</span>
-                    </p>
-                  )}
                 </div>
               </div>
             ) : (

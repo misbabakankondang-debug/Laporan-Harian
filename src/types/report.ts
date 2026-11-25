@@ -37,6 +37,7 @@ export interface ChecklistItemResponse {
   questionIndex: number; // 1..10
   question: string;
   answer: ChecklistAnswer | '';
+  description?: string; // Deskripsi kondisi khusus jika answer === 'ya'
 }
 
 export interface ReportJenjangEntry {
