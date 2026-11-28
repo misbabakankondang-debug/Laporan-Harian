@@ -231,6 +231,8 @@ export const migrateUsersList = (users: UserProfile[], deletedSet = getDeletedUs
 export const mapDbProfileToUserProfile = (rp: any): UserProfile => {
   const normalizedRole = normalizeUserRole(rp.role);
   const fullName = rp.full_name || rp.name || rp.email || 'Pengguna SIBAHAR';
+  const normalizedJabatan =
+    typeof rp?.jabatan === 'string' && rp.jabatan.trim() ? rp.jabatan.trim() : undefined;
   return {
     id: rp.id,
     name: fullName,
@@ -240,6 +242,7 @@ export const mapDbProfileToUserProfile = (rp: any): UserProfile => {
     department: rp.department || 'Sekolah Rakyat Terintegerasi 1 Sumedang',
     role: USER_ROLES[normalizedRole]?.label || rp.role || normalizedRole,
     roleKey: normalizedRole,
+    ...(normalizedJabatan ? { jabatan: normalizedJabatan } : {}),
     avatarInitials: rp.avatar_initials || computeAvatarInitials(fullName),
     avatarUrl: rp.avatar_url || undefined,
     isActive: rp.is_active !== false,
@@ -453,6 +456,7 @@ export interface AdminCreateUserRequestPayload {
   password?: string;
   fullName: string;
   role: UserRole;
+  jabatan?: string;
   nip: string;
   department: string;
   phone: string;
@@ -495,6 +499,7 @@ export const executeAdminCreateUserApi = async (
           full_name: apiBody.user.full_name || payload.fullName,
           email: apiBody.user.email || payload.email,
           role: apiBody.user.role || payload.role,
+          jabatan: apiBody.user.jabatan ?? payload.jabatan,
           nip: apiBody.user.nip ?? payload.nip,
           phone: apiBody.user.phone ?? payload.phone,
           department: apiBody.user.department ?? payload.department,
@@ -561,6 +566,7 @@ interface AuthContextType {
     name: string;
     email: string;
     roleKey: UserRole;
+    jabatan?: string;
     nip?: string;
     department?: string;
     phone?: string;
@@ -852,6 +858,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const updatedInitials =
       updates.avatarInitials ||
       (updates.name !== undefined ? computeAvatarInitials(updatedName, prevUser.avatarInitials) : prevUser.avatarInitials);
+    const hasJabatanUpdate = updates.jabatan !== undefined;
+    const updatedJabatan = hasJabatanUpdate
+      ? updates.jabatan?.trim() || undefined
+      : prevUser.jabatan;
 
     const updated: UserProfile = {
       ...prevUser,
@@ -859,6 +869,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       name: updatedName,
       roleKey: normalizedRole,
       role: updates.role || USER_ROLES[normalizedRole]?.label || prevUser.role,
+      jabatan: updatedJabatan,
       avatarInitials: updatedInitials,
     };
 
@@ -882,6 +893,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (updated.department !== undefined) payload.department = updated.department;
       if (updated.avatarUrl !== undefined) payload.avatar_url = updated.avatarUrl;
       if (updated.avatarInitials) payload.avatar_initials = updated.avatarInitials;
+      if (hasJabatanUpdate && (Boolean(updatedJabatan) || Boolean(prevUser.jabatan))) {
+        payload.jabatan = updatedJabatan || null;
+      }
 
       const query = isUuid(updated.id)
         ? client.from('profiles').update(payload).eq('id', updated.id!)
@@ -901,6 +915,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     name: string;
     email: string;
     roleKey: UserRole;
+    jabatan?: string;
     nip?: string;
     department?: string;
     phone?: string;
@@ -911,6 +926,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const cleanedName = userData.name.trim();
     const cleanedEmail = userData.email.trim().toLowerCase();
     const normalizedRole = normalizeUserRole(userData.roleKey);
+    const cleanedJabatan = typeof userData.jabatan === 'string' ? userData.jabatan.trim() : '';
     const cleanedNip = userData.nip?.trim() || '-';
     const cleanedPhone = userData.phone?.trim() || '';
     const cleanedDept = userData.department?.trim() || 'Sekolah Rakyat Terintegerasi 1 Sumedang';
@@ -977,6 +993,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       email: cleanedEmail,
       fullName: cleanedName,
       role: normalizedRole,
+      ...(cleanedJabatan ? { jabatan: cleanedJabatan } : {}),
       nip: cleanedNip,
       department: cleanedDept,
       phone: cleanedPhone,
@@ -1035,6 +1052,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const nextPhone = updates.phone !== undefined ? updates.phone.trim() : targetUser.phone;
     const nextDept = updates.department !== undefined ? updates.department.trim() : targetUser.department;
     const nextActive = updates.isActive !== undefined ? updates.isActive : targetUser.isActive !== false;
+    const hasJabatanUpdate = updates.jabatan !== undefined;
+    const nextJabatan = hasJabatanUpdate
+      ? updates.jabatan?.trim() || ''
+      : targetUser.jabatan || '';
 
     let updatedUser: UserProfile = {
       ...targetUser,
@@ -1045,6 +1066,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       department: nextDept,
       roleKey: nextRoleKey,
       role: nextRoleLabel,
+      jabatan: nextJabatan || undefined,
       avatarInitials: nextInitials,
       isActive: nextActive,
     };
@@ -1082,6 +1104,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (updates.avatarUrl !== undefined) {
             payload.avatar_url = updates.avatarUrl;
           }
+          if (hasJabatanUpdate && (Boolean(nextJabatan) || Boolean(targetUser.jabatan))) {
+            payload.jabatan = nextJabatan || null;
+          }
 
           const { data: updatedRow, error: updateErr } = await client
             .from('profiles')
@@ -1091,6 +1116,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             .maybeSingle();
 
           if (updateErr) {
+            const errCode = String(updateErr.code || '').toUpperCase();
+            const errMsgLower = String(updateErr.message || '').toLowerCase();
+            if (
+              (errCode === 'PGRST204' ||
+                errCode === '42703' ||
+                errMsgLower.includes('schema cache') ||
+                errMsgLower.includes('does not exist')) &&
+              errMsgLower.includes('jabatan')
+            ) {
+              return {
+                success: false,
+                schemaMismatch: true,
+                error:
+                  'Kolom "jabatan" belum tersedia pada tabel public.profiles di Supabase. Jalankan migrasi SQL supabase/migrations/20261127_shift_and_jabatan_tim_piket.sql di Supabase SQL Editor lalu coba simpan kembali.',
+              };
+            }
             return { success: false, error: `Gagal memperbarui profil di Supabase: ${updateErr.message}` };
           }
 

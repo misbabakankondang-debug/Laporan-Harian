@@ -43,7 +43,7 @@ import {
   DeleteReportResult,
   DeleteReportsBulkResult
 } from './lib/supabase';
-import { formatReportTicketNumber, canDeleteReport } from './utils/formatters';
+import { formatReportTicketNumber, canDeleteReport, getUserJabatanDisplay } from './utils/formatters';
 
 function SIBAHARAppContent() {
   const { 
@@ -685,6 +685,11 @@ function SIBAHARAppContent() {
     const newNip = profileUpdates.nip?.trim();
     const newDept = profileUpdates.department?.trim();
     const newRole = profileUpdates.role?.trim();
+    const oldJabatanDisplay = getUserJabatanDisplay(currentUser);
+    const hasJabatanUpdate = profileUpdates.jabatan !== undefined;
+    const nextJabatanDisplay = hasJabatanUpdate
+      ? profileUpdates.jabatan?.trim() || newRole || USER_ROLES[currentUser.roleKey]?.label || currentUser.role
+      : undefined;
 
     setReports((prevReports) => {
       let hasChanges = false;
@@ -704,7 +709,12 @@ function SIBAHARAppContent() {
             reporterDept: newDept || r.reporterDept,
             picName: (r.picName === currentUser.name && newName) ? newName : r.picName,
             picNip: (r.picNip === currentUser.nip && newNip !== undefined) ? newNip : r.picNip,
-            picRole: (newRole && r.picRole === currentUser.role) ? newRole : r.picRole,
+            picRole:
+              nextJabatanDisplay && r.picRole === oldJabatanDisplay
+                ? nextJabatanDisplay
+                : !currentUser.jabatan && newRole && r.picRole === currentUser.role
+                ? newRole
+                : r.picRole,
           };
 
           // Simpan perubahan langsung ke database Supabase

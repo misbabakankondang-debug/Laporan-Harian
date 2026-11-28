@@ -19,7 +19,7 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
 
-    const { email, password, fullName, role, nip, department, phone } = await req.json();
+    const { email, password, fullName, role, jabatan, nip, department, phone } = await req.json();
 
     if (!email || !password || !fullName || !role) {
       return new Response(
@@ -31,6 +31,7 @@ serve(async (req) => {
     const normalizedEmail = String(email).trim().toLowerCase();
     const normalizedName = String(fullName).trim();
     const normalizedRole = String(role).trim() === 'keamanan' ? 'tenaga_keamanan' : String(role).trim();
+    const normalizedJabatan = typeof jabatan === 'string' ? jabatan.trim().slice(0, 100) : '';
 
     const { data: authData, error: authError } = await supabaseClient.auth.admin.createUser({
       email: normalizedEmail,
@@ -39,6 +40,7 @@ serve(async (req) => {
       user_metadata: {
         full_name: normalizedName,
         role: normalizedRole,
+        ...(normalizedJabatan ? { jabatan: normalizedJabatan } : {}),
         nip: nip?.trim() || '-',
         department: department?.trim() || "Sekolah Rakyat Terintegerasi 1 Sumedang",
       },
@@ -64,6 +66,7 @@ serve(async (req) => {
       full_name: normalizedName,
       email: normalizedEmail,
       role: normalizedRole,
+      ...(normalizedJabatan ? { jabatan: normalizedJabatan } : {}),
       nip: nip?.trim() || "-",
       phone: phone?.trim() || "",
       department: department?.trim() || "Sekolah Rakyat Terintegerasi 1 Sumedang",

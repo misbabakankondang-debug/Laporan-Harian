@@ -1792,6 +1792,7 @@ export const mapDbReportToReportItem = (row: any): ReportItem => {
     priority: row.priority,
     location: row.location || '',
     incidentDate: row.incident_date,
+    ...(typeof row?.shift === 'string' && row.shift.trim() ? { shift: row.shift.trim() } : {}),
     createdAt: row.created_at,
     description: row.description,
     entries: normalizedEntries,
@@ -1844,6 +1845,7 @@ export const mapReportItemToDbRow = (item: ReportItem, userId: string, userRole:
     priority: item.priority,
     description: item.description,
     incident_date: item.incidentDate,
+    ...(item.shift && item.shift.trim() ? { shift: item.shift.trim() } : {}),
     location: item.location || '',
     status: item.status,
     reporter_name: item.reporterName,
@@ -2056,6 +2058,15 @@ const formatSupabaseReportError = (
   if (code === '23505' || lower.includes('duplicate key')) {
     return `Terjadi bentrokan ID laporan di database (duplicate key). Silakan kirim ulang laporan.`;
   }
+  if (
+    (code === 'PGRST204' ||
+      code === '42703' ||
+      lower.includes('schema cache') ||
+      (lower.includes('column') && lower.includes('does not exist'))) &&
+    lower.includes('shift')
+  ) {
+    return 'Kolom "shift" belum tersedia di tabel public.reports Supabase. Jalankan migrasi SQL supabase/migrations/20261127_shift_and_jabatan_tim_piket.sql di Supabase SQL Editor lalu coba kembali.';
+  }
   if (lower.includes('failed to fetch') || lower.includes('network')) {
     return `Koneksi ke server Supabase terputus saat ${fallbackAction}. Periksa jaringan internet Anda dan coba lagi.`;
   }
@@ -2095,6 +2106,14 @@ export async function submitReportToSupabase(
     return {
       success: false,
       error: 'Gagal memverifikasi sesi autentikasi Supabase sebelum menyimpan laporan.',
+    };
+  }
+
+  const cleanedShift = typeof newReportData?.shift === 'string' ? newReportData.shift.trim() : '';
+  if (!cleanedShift) {
+    return {
+      success: false,
+      error: 'Shift wajib dipilih sebelum mengirim laporan.',
     };
   }
 

@@ -10,6 +10,8 @@ import {
   ReportJenjangEntry,
   ReportPriority,
   ReportStatus,
+  USER_ROLES,
+  UserProfile,
   UserRole,
 } from '../types/report';
 
@@ -799,6 +801,8 @@ export function reportMatchesSearchQuery(report: ReportItem, query: string): boo
   if (report.description.toLowerCase().includes(q)) return true;
   if (report.reporterName.toLowerCase().includes(q)) return true;
   if ((report.location || '').toLowerCase().includes(q)) return true;
+  if ((report.shift || '').toLowerCase().includes(q)) return true;
+  if ((report.picRole || '').toLowerCase().includes(q)) return true;
   if ((report.jenjang || '').toLowerCase().includes(q)) return true;
   if (getCategoryDisplayLabel(report.category, report.customCategory).toLowerCase().includes(q)) {
     return true;
@@ -850,27 +854,61 @@ export function isKepalaSekolahReporter(
   return picRoleRaw.includes('kepala sekolah');
 }
 
+export function getUserJabatanDisplay(
+  user?: Pick<UserProfile, 'jabatan' | 'role' | 'roleKey'> | null
+): string {
+  if (!user) return 'Staf / Petugas';
+  const customJabatan = String(user.jabatan || '').trim();
+  if (customJabatan) return customJabatan;
+  if (user.roleKey && USER_ROLES[user.roleKey]?.label) {
+    return USER_ROLES[user.roleKey].label;
+  }
+  return String(user.role || '').trim() || 'Staf / Petugas';
+}
+
 export function getReporterRoleDisplayLabel(
   report: Pick<ReportItem, 'userRole' | 'picRole' | 'reporterDept'>
 ): string {
+  const picRole = String(report.picRole || '').trim();
+  if (picRole.toLowerCase() === 'tim piket') {
+    return 'Tim Piket';
+  }
   if (isKepalaSekolahReporter(report)) {
     return 'Kepala Sekolah Rakyat Terintegerasi 1 Sumedang';
   }
   const roleRaw = String(report.userRole || '').trim().toLowerCase();
+  if (roleRaw === 'admin') {
+    if (picRole && picRole.toLowerCase() !== 'admin') {
+      return picRole;
+    }
+    return 'Administrator Sistem';
+  }
+  if (picRole && !picRole.toLowerCase().includes('kepala sekolah')) {
+    return picRole;
+  }
   if (roleRaw === 'wali_asrama') return 'Wali Asrama';
   if (roleRaw === 'wali_asuh') return 'Wali Asuh';
   if (roleRaw === 'guru') return 'Guru';
   if (roleRaw === 'tenaga_keamanan' || roleRaw === 'keamanan') return 'Tenaga Keamanan';
-  if (roleRaw === 'admin') return 'Administrator Sistem';
 
-  const picRole = String(report.picRole || '').trim();
-  if (picRole && !picRole.toLowerCase().includes('kepala sekolah')) {
-    return picRole;
-  }
   if (report.reporterDept && report.reporterDept.trim()) {
     return report.reporterDept.trim();
   }
   return 'Staf / Petugas';
+}
+
+export function getReportJabatanBadgeLabel(
+  report: Pick<ReportItem, 'userRole' | 'picRole' | 'reporterDept'>
+): string {
+  const picRole = String(report.picRole || '').trim();
+  if (picRole.toLowerCase() === 'tim piket') {
+    return 'Tim Piket';
+  }
+  if (report.userRole && USER_ROLES[report.userRole]) {
+    return USER_ROLES[report.userRole].label;
+  }
+  if (picRole) return picRole;
+  return report.reporterDept || 'Sekolah Rakyat';
 }
 
 export function entryIsNihil(

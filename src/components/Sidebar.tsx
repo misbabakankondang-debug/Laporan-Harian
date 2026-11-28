@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { UserProfile, USER_ROLES } from '../types/report';
 import { useAuth } from '../context/AuthContext';
+import { getUserJabatanDisplay } from '../utils/formatters';
 
 export type TabType = 'dashboard' | 'create' | 'stats' | 'history' | 'settings';
 
@@ -83,6 +84,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const currentRoleInfo = USER_ROLES[currentRole] || USER_ROLES.guru;
+  const userJabatanDisplay = getUserJabatanDisplay(userProfile);
 
   return (
     <>
@@ -200,10 +202,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="overflow-hidden min-w-0 flex-1">
               <p className="text-xs font-bold truncate text-slate-900" title={userProfile.name}>{userProfile.name}</p>
-              <div className="flex items-center gap-1.5 mt-0.5">
+              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                 <span className="text-[10px] bg-emerald-100 text-emerald-900 font-semibold px-1.5 py-0.2 rounded border border-emerald-200 truncate">
-                  {currentRoleInfo.label}
+                  {userJabatanDisplay}
                 </span>
+                {userJabatanDisplay !== currentRoleInfo.label && (
+                  <span className="text-[9.5px] bg-slate-100 text-slate-700 font-medium px-1.5 py-0.2 rounded border border-slate-200 truncate">
+                    {currentRoleInfo.label}
+                  </span>
+                )}
               </div>
             </div>
           </div>

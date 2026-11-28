@@ -629,6 +629,15 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                 <Calendar className="w-3.5 h-3.5" />
                 Tanggal Kejadian: <strong className="text-slate-800 font-mono">{formatDateOnly(report.incidentDate)}</strong>
               </span>
+              {report.shift && (
+                <>
+                  <span>·</span>
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                    Shift: <strong className="text-slate-800">{report.shift}</strong>
+                  </span>
+                </>
+              )}
               <span>·</span>
               <span className="flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5" />
@@ -767,13 +776,21 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
             <div>
               <span className="text-slate-500 block text-[11px] font-medium">Pelapor</span>
               <p className="font-semibold text-slate-900 mt-0.5">{report.reporterName}</p>
-              <p className="text-slate-600 text-[11px]">{reporterRoleLabel}{report.reporterNip ? ` · NIP. ${report.reporterNip}` : ''}</p>
+              <p className="text-slate-600 text-[11px]">
+                Jabatan Pelapor: <strong className="text-slate-800">{reporterRoleLabel}</strong>
+                {report.reporterNip ? ` · NIP. ${report.reporterNip}` : ''}
+              </p>
             </div>
             <div>
               <span className="text-slate-500 block text-[11px] font-medium">Lokasi / Area Kejadian</span>
               <p className="font-semibold text-slate-900 mt-0.5">
                 {report.location || 'Lingkungan Sekolah Rakyat 1 Sumedang'}
               </p>
+              {report.shift && (
+                <p className="text-slate-600 text-[11px] mt-0.5">
+                  Shift: <strong className="text-slate-800">{report.shift}</strong>
+                </p>
+              )}
             </div>
           </div>
 

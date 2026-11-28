@@ -8,6 +8,8 @@ import {
   ReportJenjangEntry,
   JENJANG_OPTIONS,
   JenjangType,
+  SHIFT_OPTIONS,
+  JABATAN_OPTIONS,
 } from '../types/report';
 import {
   formatReportTicketNumber,
@@ -50,6 +52,7 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
 
   const [title, setTitle] = useState(report.title);
   const [incidentDate, setIncidentDate] = useState(report.incidentDate);
+  const [shift, setShift] = useState(report.shift || '');
   const [location, setLocation] = useState(report.location || '');
   const [assignedTo, setAssignedTo] = useState(report.assignedTo || '');
 
@@ -309,6 +312,11 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
       return;
     }
 
+    if (Boolean(report.shift) && !shift.trim()) {
+      setError('Shift laporan tidak boleh dikosongkan.');
+      return;
+    }
+
     const now = new Date();
     const timeFormatted =
       now.toLocaleDateString('id-ID', {
@@ -346,6 +354,7 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
         entries: summary.normalizedEntries,
         attachments: hasAnyOtherModeEntry || attachments.length > 0 ? attachments : [],
         incidentDate,
+        shift: shift.trim() || undefined,
         location: location.trim(),
         picName: picName.trim(),
         picRole: picRole.trim(),
@@ -380,6 +389,7 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
         customCategory: legacyCategory === 'lainnya_manual' ? legacyCustomCategory.trim() : undefined,
         priority: legacyPriority,
         incidentDate,
+        shift: shift.trim() || undefined,
         location: location.trim(),
         description: legacyDescription.trim(),
         picName: picName.trim(),
@@ -496,11 +506,17 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
                 </label>
                 <input
                   type="text"
+                  list="edit-pic-role-options"
                   value={picRole}
                   onChange={(e) => setPicRole(e.target.value)}
-                  placeholder="Kosongkan jika belum ada"
+                  placeholder="Misal: Tim Piket, Guru, Wali Asrama"
                   className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-indigo-500"
                 />
+                <datalist id="edit-pic-role-options">
+                  {JABATAN_OPTIONS.map((jab) => (
+                    <option key={jab} value={jab} />
+                  ))}
+                </datalist>
               </div>
               <div>
                 <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
@@ -517,8 +533,8 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
             </div>
           </div>
 
-          {/* Tanggal & Lokasi */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Tanggal Kejadian, Shift, & Lokasi */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="block text-slate-700 font-medium mb-1">Tanggal Kejadian</label>
               <input
@@ -527,6 +543,29 @@ export const EditReportModal: React.FC<EditReportModalProps> = ({
                 onChange={(e) => setIncidentDate(e.target.value)}
                 className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-indigo-500"
               />
+            </div>
+
+            <div>
+              <label className="block text-slate-700 font-medium mb-1">
+                Shift {Boolean(report.shift) && <span className="text-rose-500">*</span>}
+              </label>
+              <select
+                value={shift}
+                onChange={(e) => {
+                  setShift(e.target.value);
+                  setError('');
+                }}
+                className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-indigo-500"
+              >
+                <option value="">
+                  {report.shift ? '-- Pilih Shift --' : '-- Tidak Tercatat (Laporan Lama) --'}
+                </option>
+                {SHIFT_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>

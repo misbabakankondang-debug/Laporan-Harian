@@ -23,6 +23,7 @@ import {
   ReportJenjangEntry,
   JENJANG_OPTIONS,
   JenjangType,
+  SHIFT_OPTIONS,
 } from '../types/report';
 import {
   formatFileSize,
@@ -36,6 +37,7 @@ import {
   getReportJenjangBadgeList,
   getReportEntriesSummaryCategories,
   isImageAttachmentFile,
+  getUserJabatanDisplay,
   EntryValidationErrors,
 } from '../utils/formatters';
 import {
@@ -78,6 +80,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     const today = new Date();
     return today.toISOString().split('T')[0];
   });
+  const [shift, setShift] = useState<string>('');
   const [location, setLocation] = useState('');
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [reporterSignature, setReporterSignature] = useState<string>('');
@@ -91,6 +94,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
 
   // Independent errors per field & per entry
   const [titleError, setTitleError] = useState('');
+  const [shiftError, setShiftError] = useState('');
   const [entryErrors, setEntryErrors] = useState<Record<string, EntryValidationErrors>>({});
   const [uploadingEntries, setUploadingEntries] = useState<Record<string, boolean>>({});
   const [isModeBUploading, setIsModeBUploading] = useState(false);
@@ -99,7 +103,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
 
   // Penanggung Jawab otomatis terisi dari akun profil pengguna yang sedang login
   const picName = userProfile.name;
-  const picRole = userProfile.role;
+  const picRole = getUserJabatanDisplay(userProfile);
   const picNip = userProfile.nip || '';
 
   // Feedback states
@@ -318,12 +322,21 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     }
     setTitleError(nextTitleError);
 
+    let nextShiftError = '';
+    if (!shift.trim()) {
+      nextShiftError = 'Shift wajib dipilih';
+    }
+    setShiftError(nextShiftError);
+
     const entryValidation = validateJenjangEntries(entries);
     setEntryErrors(entryValidation.entryErrors);
 
-    if (nextTitleError || !entryValidation.valid) {
+    if (nextTitleError || nextShiftError || !entryValidation.valid) {
       const firstInvalidEntryId = Object.keys(entryValidation.entryErrors)[0];
-      if (!nextTitleError && firstInvalidEntryId) {
+      if (!nextTitleError && nextShiftError) {
+        const shiftEl = document.getElementById('report-shift-select');
+        shiftEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (!nextTitleError && !nextShiftError && firstInvalidEntryId) {
         const el = document.getElementById(`entry-card-${firstInvalidEntryId}`);
         el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
@@ -355,6 +368,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         customCategory: summary.customCategory,
         priority: summary.priority,
         incidentDate: incidentDate || new Date().toISOString().split('T')[0],
+        shift: shift.trim(),
         location: location.trim() || 'Lingkungan Sekolah Rakyat Terintegerasi 1 Sumedang',
         description: summary.description,
         entries: summary.normalizedEntries,
@@ -414,8 +428,8 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         )
     );
 
-    if (!title.trim() && !hasAnyEntryInput) {
-      alert('Tuliskan minimal judul, jenjang, atau isian awal sebelum menyimpan draft.');
+    if (!title.trim() && !shift.trim() && !hasAnyEntryInput) {
+      alert('Tuliskan minimal judul, shift, jenjang, atau isian awal sebelum menyimpan draft.');
       return;
     }
 
@@ -452,6 +466,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
         firstEntry?.category === 'lainnya_manual' ? firstEntry.customCategory : undefined,
       priority: firstEntry?.priority || 'sedang',
       incidentDate: incidentDate || new Date().toISOString().split('T')[0],
+      ...(shift.trim() ? { shift: shift.trim() } : {}),
       location: location.trim() || 'Sekolah Rakyat Terintegerasi 1 Sumedang',
       description: summaryDesc,
       entries: preservedEntries,
@@ -472,11 +487,12 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     }
 
     resetForm();
-    alert('Draft laporan berhasil disimpan! Seluruh jenjang, asrama, kategori, checklist, deskripsi, dan foto eviden akan dipulihkan saat draft dibuka.');
+    alert('Draft laporan berhasil disimpan! Seluruh jenjang, asrama, shift, kategori, checklist, deskripsi, dan foto eviden akan dipulihkan saat draft dibuka.');
   };
 
   const resetForm = () => {
     setTitle('');
+    setShift('');
     setLocation('');
     setAttachments([]);
     setModeBUploadNotice(null);
@@ -487,6 +503,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
     setUploadSessionKey(createUploadSessionKey());
     setEntries([createEmptyJenjangEntry('')]);
     setTitleError('');
+    setShiftError('');
     setEntryErrors({});
     setUploadingEntries({});
   };
@@ -494,11 +511,13 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
   const loadDraftIntoForm = (draft: ReportItem) => {
     setTitle(draft.title.startsWith('Draft Tanpa Judul') ? '' : draft.title);
     setIncidentDate(draft.incidentDate || new Date().toISOString().split('T')[0]);
+    setShift(draft.shift || '');
     setLocation(draft.location || '');
     setAttachments(draft.attachments || []);
     setReporterSignature(draft.reporterSignature || '');
     setEditingDraftId(draft.id);
     setTitleError('');
+    setShiftError('');
     setEntryErrors({});
 
     if (Array.isArray(draft.entries) && draft.entries.length > 0) {
@@ -793,8 +812,8 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
             )}
           </div>
 
-          {/* Tanggal Kejadian & Lokasi (2 Kolom) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Tanggal Kejadian, Shift, & Lokasi (3 Kolom pada Desktop, Tersusun Rapi pada Seluler) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Tanggal Kejadian / Terkait
@@ -805,6 +824,42 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
                 onChange={(e) => setIncidentDate(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm transition bg-white"
               />
+            </div>
+
+            <div>
+              <label
+                htmlFor="report-shift-select"
+                className="block text-sm font-medium text-slate-700 mb-1"
+              >
+                Shift <span className="text-rose-500">*</span>
+              </label>
+              <select
+                id="report-shift-select"
+                value={shift}
+                onChange={(e) => {
+                  setShift(e.target.value);
+                  if (shiftError) setShiftError('');
+                }}
+                aria-invalid={Boolean(shiftError)}
+                className={`w-full px-3.5 py-2.5 rounded-lg border text-sm transition bg-white focus:outline-hidden ${
+                  shiftError
+                    ? 'border-rose-400 focus:ring-2 focus:ring-rose-500/20 bg-rose-50/20'
+                    : 'border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20'
+                }`}
+              >
+                <option value="">-- Pilih Shift --</option>
+                {SHIFT_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+              {shiftError && (
+                <p className="text-xs text-rose-500 mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{shiftError}</span>
+                </p>
+              )}
             </div>
 
             <div>
@@ -1055,7 +1110,7 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
               <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
               <span>
                 Penanggung Jawab Otomatis: <strong className="text-slate-800">{userProfile.name}</strong>{' '}
-                ({userProfile.role} — NIP: {userProfile.nip || '-'})
+                ({getUserJabatanDisplay(userProfile)} — NIP: {userProfile.nip || '-'})
               </span>
             </div>
 
@@ -1130,6 +1185,14 @@ export const CreateReportView: React.FC<CreateReportViewProps> = ({
                           <span className="text-[11px] text-slate-500">
                             {formatDateOnly(draft.incidentDate)}
                           </span>
+                          {draft.shift && (
+                            <>
+                              <span className="text-[11px] text-slate-400">·</span>
+                              <span className="text-[11px] font-semibold text-sky-800">
+                                {draft.shift}
+                              </span>
+                            </>
+                          )}
                           {jenjangBadges.length > 0 && (
                             <>
                               <span className="text-[11px] text-slate-400">·</span>

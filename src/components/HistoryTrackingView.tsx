@@ -27,7 +27,8 @@ import {
   reportMatchesJenjang,
   reportMatchesPriority,
   reportMatchesSearchQuery,
-  canDeleteReport
+  canDeleteReport,
+  getReportJabatanBadgeLabel
 } from '../utils/formatters';
 import { EditReportModal } from './EditReportModal';
 import { SubmitReportResult, DeleteReportResult } from '../lib/supabase';
@@ -121,8 +122,10 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
       'Rincian Per Jenjang',
       'Prioritas',
       'Tanggal Kejadian',
+      'Shift',
       'Status',
       'Pelapor',
+      'Jabatan Pelapor',
       'Departemen',
       'Petugas Penanggung Jawab',
     ];
@@ -134,6 +137,7 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
             .map((e) => `${e.jenjang} (${formatDormitoryTypesLabel(e.dormitoryTypes, e.dormitoryType) || '-'}): ${getCategoryDisplayLabel(e.category, e.customCategory)} [${priorityLabels[e.priority]?.label || e.priority}]`)
             .join(' | ')
         : getCategoryDisplayLabel(r.category, r.customCategory);
+      const jabatanExport = getReportJabatanBadgeLabel(r) || '-';
 
       return [
         formatReportTicketNumber(r),
@@ -143,8 +147,10 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
         `"${entriesText.replace(/"/g, '""')}"`,
         `"${priorityLabels[r.priority]?.label || r.priority}"`,
         r.incidentDate,
+        r.shift ? `"${r.shift.replace(/"/g, '""')}"` : '-',
         statusLabels[r.status]?.label || r.status,
         `"${r.reporterName.replace(/"/g, '""')}"`,
+        `"${jabatanExport.replace(/"/g, '""')}"`,
         `"${r.reporterDept.replace(/"/g, '""')}"`,
         `"${(r.assignedTo || 'Belum ditugaskan').replace(/"/g, '""')}"`,
       ];
@@ -418,9 +424,14 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                         )}
                       </td>
 
-                      {/* Tanggal Kejadian */}
+                      {/* Tanggal Kejadian & Shift */}
                       <td className="py-3.5 px-4 font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                        {formatDateOnly(report.incidentDate)}
+                        <div>{formatDateOnly(report.incidentDate)}</div>
+                        {report.shift && (
+                          <div className="text-[10.5px] font-sans font-semibold text-sky-800 mt-0.5">
+                            {report.shift}
+                          </div>
+                        )}
                       </td>
 
                       {/* Prioritas (Kasus Ringan, Sedang, Berat) */}
@@ -443,16 +454,39 @@ export const HistoryTrackingView: React.FC<HistoryTrackingViewProps> = ({
                         <p className="font-medium text-slate-800 text-xs truncate max-w-[150px]">
                           {report.picName || report.reporterName}
                         </p>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          {report.userRole && USER_ROLES[report.userRole] ? (
-                            <span className="text-[10px] font-semibold px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded">
-                              {USER_ROLES[report.userRole].label}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-slate-400">
-                              {report.reporterDept || 'Sekolah Rakyat'}
-                            </span>
-                          )}
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {(() => {
+                            const jabatanLabel = getReportJabatanBadgeLabel(report);
+                            const roleLabel =
+                              report.userRole && USER_ROLES[report.userRole]
+                                ? USER_ROLES[report.userRole].label
+                                : '';
+                            if (jabatanLabel) {
+                              return (
+                                <>
+                                  <span
+                                    className={`text-[10px] font-semibold px-1.5 py-0.2 rounded ${
+                                      jabatanLabel !== roleLabel
+                                        ? 'bg-indigo-100 text-indigo-800'
+                                        : 'bg-emerald-100 text-emerald-800'
+                                    }`}
+                                  >
+                                    {jabatanLabel}
+                                  </span>
+                                  {roleLabel && jabatanLabel !== roleLabel && (
+                                    <span className="text-[10px] text-slate-500">
+                                      ({roleLabel})
+                                    </span>
+                                  )}
+                                </>
+                              );
+                            }
+                            return (
+                              <span className="text-[10px] text-slate-400">
+                                {report.reporterDept || 'Sekolah Rakyat'}
+                              </span>
+                            );
+                          })()}
                         </div>
                       </td>
 

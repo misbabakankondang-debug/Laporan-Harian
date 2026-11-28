@@ -29,7 +29,7 @@ import {
   Lock,
   Link as LinkIcon
 } from 'lucide-react';
-import { UserProfile, AppSettings, ReportItem, UserRole, USER_ROLES } from '../types/report';
+import { UserProfile, AppSettings, ReportItem, UserRole, USER_ROLES, JABATAN_OPTIONS } from '../types/report';
 import { KemensosLogo } from './KemensosLogo';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -43,7 +43,7 @@ import {
   SupabaseConnectionStatus,
   DeleteReportsBulkResult,
 } from '../lib/supabase';
-import { canDeleteReport } from '../utils/formatters';
+import { canDeleteReport, getUserJabatanDisplay } from '../utils/formatters';
 import { FULL_SUPABASE_SCHEMA_SQL } from '../data/supabaseSchema';
 
 interface SettingsViewProps {
@@ -137,6 +137,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserRole, setNewUserRole] = useState<UserRole>('guru');
+  const [newUserJabatan, setNewUserJabatan] = useState('');
   const [newUserNip, setNewUserNip] = useState('');
   const [newUserPhone, setNewUserPhone] = useState('');
   const [newUserDepartment, setNewUserDepartment] = useState('Sekolah Rakyat Terintegerasi 1 Sumedang');
@@ -153,6 +154,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [editName, setEditName] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('guru');
+  const [editJabatan, setEditJabatan] = useState('');
   const [editNip, setEditNip] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editDepartment, setEditDepartment] = useState('');
@@ -346,6 +348,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       department: department.trim(),
       role: role.trim(),
       roleKey: userProfile.roleKey || 'admin',
+      ...(userProfile.jabatan ? { jabatan: userProfile.jabatan } : {}),
       avatarInitials: initials,
       avatarUrl: userAvatarUrl,
     });
@@ -393,6 +396,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setNewUserName('');
     setNewUserEmail('');
     setNewUserRole('guru');
+    setNewUserJabatan('');
     setNewUserNip('');
     setNewUserPhone('');
     setNewUserDepartment('Sekolah Rakyat Terintegerasi 1 Sumedang');
@@ -424,10 +428,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setAddUserError('');
     setIsSavingNewUser(true);
     try {
+      const cleanedJabatan = newUserJabatan.trim();
       const res = await addNewUserByAdmin({
         name: newUserName.trim(),
         email: newUserEmail.trim(),
         roleKey: newUserRole,
+        ...(cleanedJabatan ? { jabatan: cleanedJabatan } : {}),
         nip: newUserNip.trim(),
         phone: newUserPhone.trim(),
         department: newUserDepartment.trim(),
@@ -465,6 +471,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setEditingUser(user);
     setEditName(user.name);
     setEditRole(user.roleKey === 'keamanan' ? 'tenaga_keamanan' : user.roleKey);
+    setEditJabatan(user.jabatan || '');
     setEditNip(user.nip || '');
     setEditPhone(user.phone || '');
     setEditDepartment(user.department || 'Sekolah Rakyat Terintegerasi 1 Sumedang');
@@ -488,6 +495,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         name: editName.trim(),
         roleKey: normalizedEditRole,
         role: USER_ROLES[normalizedEditRole]?.label || normalizedEditRole,
+        jabatan: editJabatan.trim(),
         nip: editNip.trim(),
         phone: editPhone.trim(),
         department: editDepartment.trim(),
@@ -626,7 +634,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               Wewenang Terbatas: Hanya Akun Admin yang Dapat Mengubah Pengaturan Aplikasi SIBAHAR
             </h4>
             <p className="text-amber-900 leading-relaxed">
-              Anda sedang masuk sebagai <strong>{userProfile.role}</strong> ({userProfile.name}). Sesuai ketentuan kebijakan RBAC SIBAHAR:
+              Anda sedang masuk sebagai <strong>{getUserJabatanDisplay(userProfile)}</strong>{userProfile.jabatan && userProfile.jabatan !== userProfile.role ? ` (Role: ${userProfile.role})` : ''} ({userProfile.name}). Sesuai ketentuan kebijakan RBAC SIBAHAR:
             </p>
             <ul className="list-disc list-inside text-amber-800 space-y-0.5 pl-1">
               <li>Pengaturan fitur, logo kop surat, hero background, nomor help desk, dan konfigurasi database Supabase dikunci.</li>
@@ -704,7 +712,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
               <div className="space-y-0.5">
                 <span className="font-bold text-slate-900 text-xs sm:text-sm block">
-                  Foto Profil Pengguna ({userProfile.role})
+                  Foto Profil Pengguna ({getUserJabatanDisplay(userProfile)}{userProfile.jabatan && userProfile.jabatan !== userProfile.role ? ` · Role: ${userProfile.role}` : ''})
                 </span>
                 <p className="text-[11px] text-slate-600 leading-relaxed">
                   Unggah foto kedinasan formal. Foto profil ini akan otomatis ditampilkan pada menu sidebar, header, dan laporan yang Anda buat.
@@ -826,9 +834,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <label className="block text-slate-700 font-medium mb-1">
                 Jabatan / Hak Akses Sistem
               </label>
-              <div className="px-3.5 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 text-xs font-semibold flex items-center justify-between">
-                <span>{userProfile.role}</span>
-                <span className="text-[10px] font-mono bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+              <div className="px-3.5 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 text-xs font-semibold flex items-center justify-between gap-2">
+                <span>
+                  {getUserJabatanDisplay(userProfile)}
+                  {userProfile.jabatan && userProfile.jabatan !== userProfile.role
+                    ? ` (Role: ${userProfile.role})`
+                    : ''}
+                </span>
+                <span className="text-[10px] font-mono bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded shrink-0">
                   {userProfile.roleKey}
                 </span>
               </div>
@@ -1568,7 +1581,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2.5 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                        {u.jabatan && u.jabatan !== roleInfo.label && (
+                          <span className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-indigo-100 text-indigo-800 border border-indigo-200">
+                            Jabatan: {u.jabatan}
+                          </span>
+                        )}
                         <span className={`px-2.5 py-1 text-[11px] font-bold rounded-lg ${roleInfo.badgeClass}`}>
                           {roleInfo.label}
                         </span>
@@ -1808,7 +1826,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-700 font-medium mb-1">
-                    Jabatan / Hak Akses (Role) <span className="text-rose-500">*</span>
+                    Hak Akses Sistem (Role) <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={newUserRole}
@@ -1836,6 +1854,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-purple-500 font-mono text-xs"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">
+                  Jabatan Operasional (Termasuk Tim Piket)
+                </label>
+                <select
+                  value={newUserJabatan}
+                  onChange={(e) => setNewUserJabatan(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-purple-500 text-xs font-semibold"
+                >
+                  <option value="">
+                    Sesuai Role Akun ({USER_ROLES[newUserRole]?.label || newUserRole})
+                  </option>
+                  {JABATAN_OPTIONS.map((jab) => (
+                    <option key={jab} value={jab}>
+                      {jab}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Pilih <strong>Tim Piket</strong> jika pengguna bertugas sebagai Tim Piket. Hak akses pengguna tetap mengikuti Role akun yang dipilih di atas.
+                </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1974,7 +2015,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-700 font-medium mb-1">
-                    Jabatan / Role Pengguna <span className="text-rose-500">*</span>
+                    Hak Akses Sistem (Role) <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={editRole}
@@ -2001,6 +2042,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     className="w-full px-3.5 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:border-emerald-500 font-mono text-xs"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">
+                  Jabatan Operasional (Termasuk Tim Piket)
+                </label>
+                <select
+                  value={editJabatan}
+                  onChange={(e) => setEditJabatan(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:border-emerald-500 text-xs font-semibold"
+                >
+                  <option value="">
+                    Sesuai Role Akun ({USER_ROLES[editRole]?.label || editRole})
+                  </option>
+                  {JABATAN_OPTIONS.map((jab) => (
+                    <option key={jab} value={jab}>
+                      {jab}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Hak akses tetap mengikuti Role akun yang dipilih; Jabatan tampil sebagai identitas pelapor (misal: Tim Piket).
+                </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

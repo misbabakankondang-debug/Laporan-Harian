@@ -1034,6 +1034,16 @@ export function buildPrintReportHtml(
         <td class="label">Tanggal Kejadian</td>
         <td class="value">${escapeHtml(formatDateOnly(report.incidentDate))}</td>
       </tr>
+      ${
+        report.shift && report.shift.trim()
+          ? `
+      <tr>
+        <td class="label">Shift</td>
+        <td class="value"><strong>${escapeHtml(report.shift.trim())}</strong></td>
+      </tr>
+      `
+          : ''
+      }
       <tr>
         <td class="label">Waktu Registrasi Sistem</td>
         <td class="value">${escapeHtml(formatDateTime(report.createdAt))}</td>
@@ -1046,7 +1056,7 @@ export function buildPrintReportHtml(
         <td class="label">Pelapor</td>
         <td class="value">
           <div style="font-weight: bold; font-size: 10pt; color: #000000;">${escapeHtml(report.reporterName)}</div>
-          <div style="font-size: 8.5pt; color: #334155; margin-top: 2px;">${escapeHtml(reporterRoleLabel)}${report.reporterNip ? ` &middot; NIP. ${escapeHtml(report.reporterNip)}` : ''}</div>
+          <div style="font-size: 8.5pt; color: #334155; margin-top: 2px;">Jabatan Pelapor: <strong>${escapeHtml(reporterRoleLabel)}</strong>${report.reporterNip ? ` &middot; NIP. ${escapeHtml(report.reporterNip)}` : ''}</div>
         </td>
       </tr>
     </table>

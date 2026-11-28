@@ -20,6 +20,27 @@ export const JENJANG_OPTIONS: readonly JenjangType[] = ['SRD', 'SRMP', 'SRMA'];
 
 export const DORMITORY_OPTIONS: readonly DormitoryType[] = ['Asrama Putera', 'Asrama Puteri'];
 
+export type ShiftType =
+  | 'Shift 1 (07.00 WIB - 15.00 WIB)'
+  | 'Shift 2 (15.00 WIB - 23.00 WIB)'
+  | 'Shift 3 (23.00 WIB - 07.00 WIB)';
+
+export const SHIFT_OPTIONS: readonly ShiftType[] = [
+  'Shift 1 (07.00 WIB - 15.00 WIB)',
+  'Shift 2 (15.00 WIB - 23.00 WIB)',
+  'Shift 3 (23.00 WIB - 07.00 WIB)',
+];
+
+export const JABATAN_OPTIONS: readonly string[] = [
+  'Wali Asrama',
+  'Wali Asuh',
+  'Guru',
+  'Tenaga Keamanan',
+  'Tim Piket',
+  'Kepala Sekolah',
+  'Admin',
+];
+
 export const CHECKLIST_QUESTIONS: readonly string[] = [
   'Apakah hari ini terjadi perundungan (bullying), baik fisik, verbal, sosial, maupun melalui media digital?',
   'Apakah terjadi dugaan kekerasan fisik, psikis, seksual, atau tindakan yang membahayakan peserta didik?',
@@ -177,6 +198,7 @@ export interface ReportItem {
   priority: ReportPriority;
   location?: string;
   incidentDate: string;
+  shift?: string;
   createdAt: string;
   description: string;
   entries?: ReportJenjangEntry[]; // Rincian per jenjang (SRD/SRMP/SRMA) dalam 1 laporan utama
@@ -204,6 +226,7 @@ export interface UserProfile {
   department: string;
   role: string;
   roleKey: UserRole;
+  jabatan?: string; // Jabatan operasional pengguna (mis. "Tim Piket"), terpisah dari hak akses roleKey
   avatarInitials: string;
   avatarUrl?: string; // Foto profil pengguna
   isActive?: boolean;

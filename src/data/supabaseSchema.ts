@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     full_name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
     role user_role_type NOT NULL DEFAULT 'guru',
+    jabatan TEXT,
     nip TEXT,
     phone TEXT,
     department TEXT DEFAULT 'Sekolah Rakyat Terintegerasi 1 Sumedang',
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS role user_role_type NOT NULL DEFAULT 'guru';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS jabatan TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS nip TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS phone TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS department TEXT DEFAULT 'Sekolah Rakyat Terintegerasi 1 Sumedang';
@@ -90,6 +92,7 @@ CREATE TABLE IF NOT EXISTS public.reports (
     priority TEXT NOT NULL DEFAULT 'sedang',
     description TEXT NOT NULL,
     incident_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    shift TEXT,
     location TEXT,
     status TEXT NOT NULL DEFAULT 'menunggu', -- draft, menunggu, diproses, selesai, ditolak
     reporter_name TEXT NOT NULL,
@@ -114,10 +117,12 @@ ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reporter_signature TEXT;
 ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS jenjang TEXT;
 ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS entries JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS custom_category TEXT;
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS shift TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON public.reports(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_jenjang ON public.reports(jenjang);
 CREATE INDEX IF NOT EXISTS idx_reports_incident_date ON public.reports(incident_date DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_shift ON public.reports(shift);
 CREATE INDEX IF NOT EXISTS idx_reports_category ON public.reports(category);
 CREATE INDEX IF NOT EXISTS idx_reports_status ON public.reports(status);
 CREATE INDEX IF NOT EXISTS idx_reports_priority ON public.reports(priority);

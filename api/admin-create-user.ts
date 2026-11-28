@@ -212,6 +212,7 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
       password,
       fullName,
       role,
+      jabatan,
       nip,
       department,
       phone,
@@ -271,6 +272,7 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
       });
     }
 
+    const normalizedJabatan = typeof jabatan === 'string' ? jabatan.trim().slice(0, 100) : '';
     const normalizedNip = nip ? String(nip).trim() : '-';
     const normalizedPhone = phone ? String(phone).trim() : '';
     const normalizedDepartment = department
@@ -387,6 +389,7 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           user_metadata: {
             full_name: normalizedName,
             role: normalizedRole,
+            ...(normalizedJabatan ? { jabatan: normalizedJabatan } : {}),
             nip: normalizedNip,
             department: normalizedDepartment,
             phone: normalizedPhone,
@@ -477,7 +480,40 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
         }
 
         // Profil sudah dibuat (oleh trigger atau proses sebelumnya) dan identitasnya cocok — jangan INSERT ulang!
-        savedProfile = existingProfileById;
+        if (
+          normalizedJabatan &&
+          String(existingProfileById.jabatan || '').trim() !== normalizedJabatan
+        ) {
+          const { data: updatedTriggerProfile, error: jabatanUpdateErr } = await supabaseAdmin
+            .from('profiles')
+            .update({
+              jabatan: normalizedJabatan,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', userId)
+            .select('*')
+            .maybeSingle();
+
+          if (jabatanUpdateErr) {
+            const schemaMismatch = isSchemaCacheError(jabatanUpdateErr);
+            return res.status(500).json({
+              error: schemaMismatch
+                ? `Akun Auth sudah dibuat (UUID: ${userId}), namun gagal menyimpan jabatan "${normalizedJabatan}" karena kolom jabatan belum tersedia di tabel profiles. Jalankan migrasi SQL terlebih dahulu.`
+                : `Akun Auth sudah dibuat (UUID: ${userId}), namun gagal menyimpan jabatan pada tabel profiles: ${jabatanUpdateErr.message}`,
+              partialAuthSuccess: true,
+              pendingAuthUserId: userId,
+              schemaMismatch,
+              code: schemaMismatch ? 'PROFILES_SCHEMA_MISMATCH' : 'PROFILES_SAVE_FAILED',
+            });
+          }
+
+          savedProfile = updatedTriggerProfile || {
+            ...existingProfileById,
+            jabatan: normalizedJabatan,
+          };
+        } else {
+          savedProfile = existingProfileById;
+        }
         profileAlreadyExisted = true;
       } else {
         // Pastikan email belum dipakai oleh profil dengan UUID berbeda sebelum melakukan INSERT
@@ -502,11 +538,12 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           });
         }
 
-        const profileRow = {
+        const profileRow: Record<string, any> = {
           id: userId,
           full_name: normalizedName,
           email: normalizedEmail,
           role: normalizedRole,
+          ...(normalizedJabatan ? { jabatan: normalizedJabatan } : {}),
           nip: normalizedNip,
           phone: normalizedPhone,
           department: normalizedDepartment,
@@ -582,6 +619,7 @@ export function createAdminCreateUserHandler(deps: AdminCreateUserDependencies =
           details: {
             email: normalizedEmail,
             role: normalizedRole,
+            ...(normalizedJabatan ? { jabatan: normalizedJabatan } : {}),
             fullName: normalizedName,
             profileSource: profileAlreadyExisted ? 'existing_verified' : 'backend_inserted',
           },

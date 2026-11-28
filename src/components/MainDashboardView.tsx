@@ -41,6 +41,9 @@ import {
   reportMatchesSearchQuery,
   isReportWhollyNihil,
   canDeleteReport,
+  getUserJabatanDisplay,
+  getReportJabatanBadgeLabel,
+  getReporterRoleDisplayLabel,
 } from '../utils/formatters';
 import { countReportsByStaffRole, matchesStaffRoleFilter } from '../utils/statistics';
 import { KemensosLogo } from './KemensosLogo';
@@ -117,6 +120,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
   }).format(new Date());
 
   const roleInfo = USER_ROLES[currentRole] || USER_ROLES.guru;
+  const userJabatanDisplay = getUserJabatanDisplay(userProfile);
 
   return (
     <div className="space-y-6">
@@ -156,6 +160,11 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               <div className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-400 text-slate-900 font-bold rounded-full text-[11px] shadow-2xs">
                 <span>Role: {roleInfo.label}</span>
               </div>
+              {userJabatanDisplay !== roleInfo.label && (
+                <div className="inline-flex items-center gap-1 px-2.5 py-1 bg-white/90 text-emerald-950 font-bold rounded-full text-[11px] shadow-2xs">
+                  <span>Jabatan: {userJabatanDisplay}</span>
+                </div>
+              )}
             </div>
 
             {/* Nama Instansi: Selector 2 -> color: #ffff00 */}
@@ -212,7 +221,10 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                 <p className="font-bold text-white truncate text-xs sm:text-sm mt-0.5" title={userProfile.name}>
                   {userProfile.name}
                 </p>
-                <p className="text-emerald-300 text-[10.5px] font-medium truncate">{userProfile.role}</p>
+                <p className="text-emerald-300 text-[10.5px] font-medium truncate">
+                  {userJabatanDisplay}
+                  {userJabatanDisplay !== roleInfo.label ? ` · ${roleInfo.label}` : ''}
+                </p>
               </div>
             </div>
           </div>
@@ -590,6 +602,8 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
               const prio = priorityLabels[item.priority] || priorityLabels.sedang;
               const stat = statusLabels[item.status] || statusLabels.menunggu;
               const makerRole = item.userRole ? USER_ROLES[item.userRole] : undefined;
+              const jabatanBadgeLabel = getReportJabatanBadgeLabel(item);
+              const reporterJabatanFull = getReporterRoleDisplayLabel(item);
               const jenjangBadges = getReportJenjangBadgeList(item);
               const itemHasYes = reportHasYesFindings(item);
               const entries = Array.isArray(item.entries) ? item.entries : [];
@@ -618,6 +632,11 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                           {makerRole.label}
                         </span>
                       )}
+                      {jabatanBadgeLabel && jabatanBadgeLabel !== makerRole?.label && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                          {jabatanBadgeLabel}
+                        </span>
+                      )}
                       {itemHasYes && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
                           <AlertTriangle className="w-3 h-3" />
@@ -631,6 +650,11 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                       <span className="text-slate-500 font-mono text-[11px]">
                         {formatDateOnly(item.incidentDate)}
                       </span>
+                      {item.shift && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-900 border border-sky-200">
+                          {item.shift}
+                        </span>
+                      )}
                     </div>
 
                     <h4 className="text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition truncate" title={item.title}>
@@ -638,7 +662,7 @@ export const MainDashboardView: React.FC<MainDashboardViewProps> = ({
                     </h4>
 
                     <p className="text-xs text-slate-500 line-clamp-1">
-                      {getReportEntriesSummaryCategories(item)} · Pelapor: <strong className="text-slate-700">{item.reporterName}</strong> {item.reporterDept ? `(${item.reporterDept})` : ''}
+                      {getReportEntriesSummaryCategories(item)} · Pelapor: <strong className="text-slate-700">{item.reporterName}</strong> · Jabatan: <strong className="text-slate-700">{reporterJabatanFull}</strong> {item.reporterDept ? `(${item.reporterDept})` : ''}
                     </p>
 
                     {entries.length > 0 && (
